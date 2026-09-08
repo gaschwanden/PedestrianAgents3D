@@ -71,6 +71,33 @@ With a `Topography` attached, per-step cost is `horizontal_distance / speed`
 where `speed = base·exp(-slope_factor·|slope + slope_offset|)`. Steeper than
 `impassable_slope` is blocked. Raise `slope_factor` to avoid hills more strongly.
 
+## Interactive viewer
+
+`pedsim.viewer.Viewer` (pygame) is a live, top-down viewer — the interactive
+counterpart of the original OpenGL sketch. It runs the simulation in real time
+and supports pan/zoom, analysis-mode switching, click editing and an isovist
+viewpoint:
+
+```bash
+pip install pygame
+python examples/run_viewer.py --scene dxf        # original scene
+python examples/run_viewer.py --scene gobekli    # topography scene
+```
+
+Controls: `SPACE` play/pause · `.` step · `[`/`]` speed · arrows / right-drag
+pan · wheel or `+`/`-` zoom · `F` fit · `0`-`5` analysis modes · `C` reset
+analysis · `O` add source-OD · `K` add sink-OD · `X` delete (OD/building) ·
+`B` draw building (click, `ENTER` to close) · `I` isovist follows mouse ·
+`V` pan tool · `H` help · `Q`/`ESC` quit.
+
+For headless capture, render a scripted session to frames and encode:
+
+```bash
+python examples/run_viewer.py --scene dxf --demo --duration 24 \
+    --record-dir /tmp/frames --record-fps 25
+ffmpeg -framerate 25 -i /tmp/frames/%05d.png -pix_fmt yuv420p viewer.mp4
+```
+
 ## Install & run
 
 ```bash
