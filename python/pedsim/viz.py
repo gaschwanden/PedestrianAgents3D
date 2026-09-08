@@ -42,61 +42,52 @@ def draw_base(
     ax.set_xlim(g.min_x, g.max_x)
     ax.set_ylim(g.min_y, g.max_y)
 
+    _LAYER_COLORS = {
+        "WATERBODY": "#274b6b",
+        "STREETS": "#3a3f47",
+        "OBSTACLES_LOW": "#39412b",
+        "OBSTACLES_HIGH": "#4a3f2b",
+        "PARK": "#2b4a2b",
+    }
+
     if show_topography and g.elevation is not None:
         elev = g.elevation.T  # [ix,iy] -> [row=y, col=x]
-        ax.imshow(
-            elev,
-            origin="lower",
-            extent=_extent(sim),
-            cmap="terrain",
-            alpha=0.85,
-            aspect="equal",
-        )
+        ax.imshow(elev, origin="lower", extent=_extent(sim), cmap="terrain",
+                  alpha=0.85, aspect="equal")
         levels = np.linspace(np.nanmin(elev), np.nanmax(elev), 14)
         ax.contour(
             np.linspace(g.min_x, g.max_x, elev.shape[1]),
             np.linspace(g.min_y, g.max_y, elev.shape[0]),
-            elev,
-            levels=levels,
-            colors="#00000055",
-            linewidths=0.5,
+            elev, levels=levels, colors="#00000055", linewidths=0.5,
         )
 
-    if site is not None:
-        if site.boundary:
-            ax.add_patch(
-                MplPolygon(
-                    np.array(site.boundary),
-                    closed=True,
-                    fill=False,
-                    edgecolor="#9aa0aa",
-                    linewidth=1.5,
-                    linestyle="--",
-                )
-            )
-        if show_walls:
-            for f in site.features:
-                if f.is_blocking:
-                    ax.add_patch(
-                        MplPolygon(
-                            np.array(f.polygon),
-                            closed=True,
-                            facecolor="#6b7280",
-                            edgecolor="#cbd5e1",
-                            linewidth=1.0,
-                            alpha=0.9,
-                        )
-                    )
+    # Site boundary.
+    if sim.site_polygon:
+        ax.add_patch(MplPolygon(np.array(sim.site_polygon), closed=True, fill=False,
+                                edgecolor="#9aa0aa", linewidth=1.2, linestyle="--"))
+
+    # Obstacles (coloured by DXF layer).
+    for o in sim.obstacles:
+        poly = o.footprint.as_xy()
+        if len(poly) >= 3:
+            ax.add_patch(MplPolygon(np.array(poly), closed=True,
+                                    facecolor=_LAYER_COLORS.get(o.layer, "#333"),
+                                    edgecolor="none", alpha=0.7))
+
+    # Buildings.
+    if show_walls:
+        for b in sim.buildings:
+            poly = b.footprint.as_xy()
+            if len(poly) >= 3:
+                ax.add_patch(MplPolygon(np.array(poly), closed=True, facecolor="#6b7280",
+                                        edgecolor="#cbd5e1", linewidth=0.8, alpha=0.9))
+
+    # Optional archaeological enclosure outlines (source/sink rings).
+    if site is not None and hasattr(site, "source_sink_features"):
         for f in site.source_sink_features():
-            ax.add_patch(
-                MplPolygon(
-                    np.array(f.polygon),
-                    closed=True,
-                    fill=False,
-                    edgecolor=_GROUP_COLORS[f.group % len(_GROUP_COLORS)],
-                    linewidth=1.6,
-                )
-            )
+            ax.add_patch(MplPolygon(np.array(f.polygon), closed=True, fill=False,
+                                    edgecolor=_GROUP_COLORS[f.group % len(_GROUP_COLORS)],
+                                    linewidth=1.6))
 
     # OD markers: circle = source, square = sink, star = both.
     for od in sim.ods:
@@ -172,6 +163,89 @@ def plot_occupancy(sim: Simulation, site: Optional[ArchaeologicalSite], path: st
     fig.savefig(path, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
     return path
+
+
+def plot_facade_visibility(sim: Simulation, path: str, by_group: bool = False,
+                           site=None, title: str = ""):
+    """Colour each building facade segment by the visibility accumulated in the
+    grid cell it faces (``display_facadevisibility`` / ``...O``)."""
+    import matplotlib.collections as mc
+
+    g = sim.grid
+    fig, ax = plt.subplots(figsize=(10, 8))
+    draw_base(ax, sim, site, show_topography=g.elevation is not None, show_walls=False)
+    segments = []
+    colors = []
+    maxv = max(g.max_boundary_visibility, 1e-6)
+    for b in sim.buildings:
+        fp = b.footprint
+        for i, seg in enumerate(fp.seg_points):
+            refs = fp.seg_pixrefs[i] if i < len(fp.seg_pixrefs) else []
+            for j in range(len(seg) - 1):
+                if j >= len(refs):
+                    break
+                px, py = refs[j]
+                if not g.in_bounds(px, py):
+                    continue
+                if by_group:
+                    vals = g.visibility_o[px, py]
+                    r = min(1.0, vals[0] / maxv) if g.num_groups > 0 else 0
+                    gg = min(1.0, vals[1] / maxv) if g.num_groups > 1 else 0
+                    bb = min(1.0, vals[2] / maxv) if g.num_groups > 2 else 0
+                    colors.append((r, gg, bb, 0.9))
+                else:
+                    v = min(1.0, g.visibility[px, py] / maxv)
+                    colors.append((1.0, 1.0 - v, 1.0 - v, 0.9))
+                segments.append([seg[j], seg[j + 1]])
+    lc = mc.LineCollection(segments, colors=colors, linewidths=3)
+    ax.add_collection(lc)
+    if title:
+        ax.set_title(title, color="white")
+    fig.patch.set_facecolor("#0d0d0f")
+    fig.savefig(path, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_traces(sim: Simulation, path: str, by_group: bool = False, site=None,
+                title: str = ""):
+    """Draw agent trajectory traces (``display_traces`` / ``...O``)."""
+    fig, ax = plt.subplots(figsize=(10, 8))
+    draw_base(ax, sim, site, show_topography=g_has_topo(sim), show_walls=True)
+    for t in sim.traces:
+        if not t.draw_me or len(t.points) < 3:
+            continue
+        pts = np.array([(p[0], p[1]) for p in t.points])
+        ax.plot(pts[:, 0], pts[:, 1], color=t.color(by_group), linewidth=1.0)
+    if title:
+        ax.set_title(title, color="white")
+    fig.patch.set_facecolor("#0d0d0f")
+    fig.savefig(path, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_isovist(sim: Simulation, iso, path: str, site=None, title: str = ""):
+    """Fill the visibility polygon computed from a viewpoint."""
+    from matplotlib.patches import Polygon as MplPolygon
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    draw_base(ax, sim, site, show_topography=g_has_topo(sim), show_walls=True)
+    poly = np.array(iso.polygon())
+    ax.add_patch(MplPolygon(poly, closed=True, facecolor="#ffe45e", edgecolor="#ffd000",
+                            alpha=0.35, zorder=3))
+    ax.scatter([iso.ox], [iso.oy], c="#ffd000", marker="*", s=140,
+               edgecolors="black", zorder=5)
+    if title:
+        ax.set_title(title, color="white")
+    fig.patch.set_facecolor("#0d0d0f")
+    fig.savefig(path, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def g_has_topo(sim: Simulation) -> bool:
+    return sim.grid.elevation is not None
 
 
 def animate(

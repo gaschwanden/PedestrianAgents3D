@@ -6,7 +6,8 @@ reproduce the same walkability rasterisation.
 """
 from __future__ import annotations
 
-from typing import Iterable, Sequence, Tuple
+import math
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -93,3 +94,113 @@ def polygon_centroid(poly: Polygon) -> Point:
         return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
     a *= 0.5
     return (cx / (6 * a), cy / (6 * a))
+
+
+def polygon_area(poly: Polygon) -> float:
+    """Signed polygon area (positive = counter-clockwise), mirroring ``MyMath.area``."""
+    r = 0.0
+    n = len(poly)
+    for i in range(n):
+        ax, ay = poly[i]
+        bx, by = poly[(i + 1) % n]
+        r += ax * by - ay * bx
+    return r / 2.0
+
+
+def clockwise(poly: Polygon) -> int:
+    """Return 1 for CCW, -1 for CW, 0 for degenerate (matches ``MyMath.clockWise``)."""
+    c = polygon_area(poly)
+    if c > 0:
+        return 1
+    if c < 0:
+        return -1
+    return 0
+
+
+def ensure_clockwise(poly: List[Point]) -> List[Point]:
+    """Return the polygon reordered so its winding is clockwise (as the Java
+    ``fixPolygonVertexOrder`` does for building footprints)."""
+    pts = list(poly)
+    if clockwise(pts) == 1:  # CCW -> reverse
+        pts.reverse()
+    return pts
+
+
+def line_segment_intersection(
+    ax: float, ay: float, bx: float, by: float,
+    cx: float, cy: float, dx: float, dy: float,
+) -> Optional[Point]:
+    """Intersection of segment A-B with segment C-D, or ``None``.
+
+    Direct port of ``MyMath.lineSegmentIntersection`` (rotate-and-project method).
+    """
+    if (ax == bx and ay == by) or (cx == dx and cy == dy):
+        return None
+    bx -= ax
+    by -= ay
+    cx -= ax
+    cy -= ay
+    dx -= ax
+    dy -= ay
+    dist_ab = math.hypot(bx, by)
+    if dist_ab == 0:
+        return None
+    the_cos = bx / dist_ab
+    the_sin = by / dist_ab
+    new_x = cx * the_cos + cy * the_sin
+    cy = cy * the_cos - cx * the_sin
+    cx = new_x
+    new_x = dx * the_cos + dy * the_sin
+    dy = dy * the_cos - dx * the_sin
+    dx = new_x
+    if (cy < 0 and dy < 0) or (cy >= 0 and dy >= 0):
+        return None
+    ab_pos = dx + (cx - dx) * dy / (dy - cy)
+    if ab_pos < 0 or ab_pos > dist_ab:
+        return None
+    return (ax + ab_pos * the_cos, ay + ab_pos * the_sin)
+
+
+def line_poly_intersections(
+    vertices: Polygon, fx: float, fy: float, x: float, y: float
+):
+    """Return ``(intersections, edge_indices)`` where a segment (fx,fy)->(x,y)
+    crosses polygon edges. ``edge_indices`` is ``[i0, i0+1, i1, i1+1]`` for up to
+    two crossings, matching ``MyMath.LinePolyIntersectons`` (used for splitting).
+    """
+    intersections: List[Point] = []
+    edge_index = [0, 0, 0, 0]
+    n = len(vertices)
+    for i in range(n):
+        ax, ay = vertices[i]
+        bx, by = vertices[(i + 1) % n]
+        inter = line_segment_intersection(fx, fy, x, y, ax, ay, bx, by)
+        if inter is not None:
+            intersections.append(inter)
+            if len(intersections) < 2:
+                edge_index[0] = i
+                edge_index[1] = i + 1
+            else:
+                edge_index[2] = i
+                edge_index[3] = i + 1
+    return intersections, edge_index
+
+
+def split_polygon(verts: Polygon, intersections, edge_index):
+    """Split ``verts`` into two polygons along a cut defined by two edge
+    crossings. Port of ``MyMath.splitPolygon``. Requires two intersections."""
+    inter1, inter2 = intersections[0], intersections[1]
+    verts1: List[Point] = []
+    verts2: List[Point] = []
+    for j in range(edge_index[1]):
+        verts1.append((verts[j][0], verts[j][1]))
+    verts1.append((inter1[0], inter1[1]))
+    verts1.append((inter2[0], inter2[1]))
+    for j in range(edge_index[3], len(verts)):
+        verts1.append((verts[j][0], verts[j][1]))
+
+    verts2.append((inter1[0], inter1[1]))
+    for j in range(edge_index[1], edge_index[3]):
+        verts2.append((verts[j][0], verts[j][1]))
+    verts2.append((inter2[0], inter2[1]))
+    return verts1, verts2

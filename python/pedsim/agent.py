@@ -48,8 +48,7 @@ class Agent:
         self.far_px = -1
         self.far_py = -1
         self.group = 0
-        self.trace: list[tuple[float, float]] = []
-        self.record_trace = False
+        self.trace = None  # optional pedsim.traces.Trace
 
     # --------------------------------------------------------------- lifecycle
     def die(self, reason: int) -> None:
@@ -80,8 +79,17 @@ class Agent:
         self.far_py = -1
         self.age = 0
         self.active = True
-        self.record_trace = sim.rng.random() * 100 < sim.trace_percent
-        self.trace = [(self.px, self.py)] if self.record_trace else []
+        # Deactivate any previous trace and (optionally) start a new one.
+        if self.trace is not None:
+            self.trace.active = False
+        self.trace = None
+        if sim.record_traces:
+            from .traces import Trace
+
+            draw = sim.rng.random() * 100 < sim.trace_percent
+            self.trace = Trace(self, draw=draw)
+            sim.traces.append(self.trace)
+            self.trace.update(sim)
         return True
 
     # ------------------------------------------------------------------ vision
@@ -117,6 +125,7 @@ class Agent:
 
         candidates: list[tuple[int, int]] = []
         weights: list[float] = []
+        accumulate = sim.accumulate_visibility
 
         step = sim.radius_divider
         j_angle = angle
@@ -131,6 +140,10 @@ class Agent:
                 pixy = int(self.py + y)
                 if pixx < 0 or pixx >= nx or pixy < 0 or pixy >= ny:
                     break
+                # Accumulate sight-line visibility (incl. the wall cell we stop
+                # at) -- this feeds the facade-visibility analysis.
+                if accumulate:
+                    grid.add_visibility(pixx, pixy, self.group)
                 if not grid.walkable[pixx, pixy]:
                     break  # line of sight blocked by a wall
                 d = cost[pixx, pixy]
@@ -204,8 +217,6 @@ class Agent:
             self.py += self.vy / mag * self.speed
         self.px = min(max(self.px, 0), grid.nx - 1)
         self.py = min(max(self.py, 0), grid.ny - 1)
-        if self.record_trace:
-            self.trace.append((self.px, self.py))
         self.age += 1
 
     def mark_occupancy(self) -> None:
