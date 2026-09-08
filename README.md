@@ -10,6 +10,21 @@ DXF files in `text/`, renders it as an interactive 3D scene with OpenGL (via JOG
 and simulates pedestrian agents that can be released and analysed through the
 on-screen (multitouch/mouse) interface.
 
+## Python port (`python/`)
+
+A modern Python re-implementation of the simulation lives in [`python/`](python/),
+aimed at ancient cities and settlements (e.g. Göbekli Tepe). It preserves the
+original vision-cone agent steering over a flood-fill field and adds:
+
+- **Topography-aware routing** — elevation raises walking effort (Tobler's
+  hiking function), so agents avoid steep ground and contour around hills.
+- **Simple importers** — `load_site` reads archaeological outlines and tags
+  structures as pedestrian *sources*/*sinks*; `load_topography` reads terrain
+  (ESRI ASCII grid, XYZ/CSV, NumPy, or grayscale heightmap).
+
+See [`python/README.md`](python/README.md) for details, install steps, and the
+Göbekli Tepe demo.
+
 ## Project layout
 
 | Path | Description |
