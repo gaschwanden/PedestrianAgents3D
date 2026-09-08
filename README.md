@@ -12,18 +12,26 @@ on-screen (multitouch/mouse) interface.
 
 ## Python port (`python/`)
 
-A modern Python re-implementation of the simulation lives in [`python/`](python/),
-aimed at ancient cities and settlements (e.g. Göbekli Tepe). It preserves the
-original vision-cone agent steering over a flood-fill field and adds:
+A full Python re-implementation of the simulation lives in [`python/`](python/),
+aimed at ancient cities and settlements (e.g. Göbekli Tepe). It reproduces the
+Java edition feature-for-feature and can load the original `text/*.dxf` scene
+directly:
 
-- **Topography-aware routing** — elevation raises walking effort (Tobler's
-  hiking function), so agents avoid steep ground and contour around hills.
-- **Simple importers** — `load_site` reads archaeological outlines and tags
-  structures as pedestrian *sources*/*sinks*; `load_topography` reads terrain
-  (ESRI ASCII grid, XYZ/CSV, NumPy, or grayscale heightmap).
+- **Vision-cone agent steering** over the flood-fill (not shortest-path).
+- **DXF import** (site, building meshes → footprints, obstacle polylines by layer).
+- **Analysis modes**: path overlap (occupancy), facade visibility (+ by group),
+  traces (+ by group), and isovist.
+- **Editing API**: add/move/delete/height/**split** buildings & obstacles;
+  add/move/delete/weight ODs; place/rotate/snap modules.
+- **3D view** (`pedsim.viz3d`): extruded buildings + agents with a rotating
+  camera — the same 3D character as the original OpenGL sketch.
+- **New — topography-aware routing**: elevation raises walking effort (Tobler's
+  hiking function), so agents avoid/contour around hills.
+- **New — simple importers**: `load_site` tags outlines as pedestrian
+  *sources*/*sinks*; `load_topography` reads terrain (ESRI ASCII/XYZ/NumPy/image).
 
-See [`python/README.md`](python/README.md) for details, install steps, and the
-Göbekli Tepe demo.
+See [`python/README.md`](python/README.md) for the full feature-parity table,
+install steps, and demos (`examples/run_features.py`, `examples/run_demo.py`).
 
 ## Project layout
 
