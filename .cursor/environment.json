@@ -1,0 +1,11 @@
+{
+  "name": "PedestrianAgents3D",
+  "install": "bash scripts/build.sh",
+  "start": "bash scripts/start-display.sh",
+  "terminals": [
+    {
+      "name": "agents",
+      "command": "DISPLAY=:99 bash scripts/run.sh"
+    }
+  ]
+}
