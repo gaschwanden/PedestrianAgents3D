@@ -1,0 +1,80 @@
+# Daily tasks. No herding: the PPN economy modelled here has no domestic herd.
+# Eligibility is an ASSUMPTION. Set task_allocation: uniform for the null model.
+source: ""
+confidence: assumption
+tasks:
+  - id: water
+    description: "Fetch water from a cistern, spring or seasonal stream"
+    destination_kind: water
+    eligible: [child, adolescent, carer, adult_a, adult_b]
+    frequency: "2 per day per household"
+    load_kg: 12
+    load_return_kg: 15
+    season_note: "Stream sources are dropped in the dry season when a cistern exists"
+    source: ""
+    confidence: assumption
+  - id: firewood
+    description: "Collect fuel"
+    destination_kind: resource:wood
+    eligible: [adolescent, adult_a, adult_b, elder]
+    frequency: "1 per 2 days"
+    load_kg: 18
+    source: ""
+    confidence: assumption
+  - id: plants
+    description: "Gather wild cereals, nuts and legumes"
+    destination_kind: resource:plants
+    eligible: [child, adolescent, adult_a, adult_b, elder]
+    frequency: seasonal
+    load_kg: 10
+    source: ""
+    confidence: assumption
+  - id: hunt
+    description: "Hunting trip"
+    destination_kind: resource:hunt
+    eligible: [adult_a, adult_b, adolescent]
+    frequency: seasonal
+    load_kg: 0
+    multi_day: true
+    source: ""
+    confidence: assumption
+  - id: chert
+    description: "Procure flint or chert"
+    destination_kind: quarry:chert
+    eligible: [adult_a, adult_b, adolescent]
+    frequency: "1 per week"
+    load_kg: 15
+    source: ""
+    confidence: assumption
+  - id: quarry
+    description: "Work a limestone quarry. Hauling is out of scope."
+    destination_kind: quarry:limestone
+    eligible: [adult_a, adult_b]
+    frequency: "linked to construction phases"
+    load_kg: 0
+    source: ""
+    confidence: assumption
+  - id: ritual
+    description: "Visit a special building"
+    destination_kind: special
+    eligible: [child, adolescent, adult_a, adult_b, elder, carer]
+    frequency: "small daily share; peaks at events"
+    load_kg: 0
+    source: ""
+    confidence: assumption
+  - id: visit
+    description: "Visit another co-occupied site"
+    destination_kind: site
+    eligible: [adolescent, adult_a, adult_b]
+    frequency: "low daily rate"
+    load_kg: 2
+    source: ""
+    confidence: assumption
+  - id: home
+    description: "Return home"
+    destination_kind: house
+    eligible: [child, adolescent, adult_a, adult_b, elder, carer]
+    frequency: "ends every chain"
+    load_kg: 0
+    source: ""
+    confidence: assumption

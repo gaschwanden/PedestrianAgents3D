@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "pedsim scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string"},
+    "scene": {"type": "string"},
+    "site": {"type": "string"},
+    "time_window": {
+      "type": "object",
+      "required": ["start_bc", "end_bc"],
+      "properties": {
+        "start_bc": {"type": "integer"},
+        "end_bc": {"type": "integer"}
+      }
+    },
+    "respect_chronology": {"type": "boolean"},
+    "tau_years": {"type": "integer", "minimum": 0},
+    "undated_policy": {"enum": ["exclude", "include", "include_flagged"]},
+    "overlap_weighting": {"type": "boolean"},
+    "pins": {"type": "object"},
+    "phase_mode": {"enum": ["manual", "by_time"]},
+    "active_phases": {"type": "array", "items": {"type": "string"}},
+    "phase_overrides": {"type": "object"},
+    "population": {"type": "string"},
+    "tasks": {"type": "string"},
+    "task_allocation": {"enum": ["by_class", "uniform"]},
+    "calendar_month": {"type": ["integer", "null"]},
+    "terrain_profile": {"type": "string"},
+    "terrain": {"type": "object"},
+    "num_agents": {"type": "integer"},
+    "steps": {"type": "integer"},
+    "seed": {"type": "integer"},
+    "seeds": {"type": "array"},
+    "gridsize": {"type": "number"},
+    "extent_m": {"type": "number"},
+    "od_mode": {"enum": ["uniform", "gravity"]},
+    "agents_per_person": {"type": ["number", "null"]},
+    "population_rule": {"type": "string"},
+    "persons_per_house": {"type": "number"},
+    "persons_per_m2": {"type": "number"},
+    "active_share": {"type": "number"},
+    "family": {"type": "string"},
+    "notes": {"type": "string"},
+    "_hash": {"type": "string"},
+    "_path": {"type": "string"},
+    "_visitor_share": {"type": "number"}
+  },
+  "required": ["scene", "time_window", "respect_chronology", "seed"]
+}

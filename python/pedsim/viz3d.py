@@ -52,12 +52,15 @@ def _terrain_surface(ax, sim: Simulation) -> float:
     return 1.0
 
 
-def _extrude_building(ax, sim: Simulation, b: Building, wall_color, roof_color) -> None:
+def _extrude_building(ax, sim: Simulation, b: Building, wall_color) -> None:
+    from .building import STANDARD_BUILDING_HEIGHT
+
     poly = b.footprint.as_xy()
     if len(poly) < 3:
         return
     base = min(_ground_z(sim, x, y) for x, y in poly)
-    top = base + max(b.height, 1.0)
+    # Walls only at the standard height — no roof face for now.
+    top = base + STANDARD_BUILDING_HEIGHT
     walls = []
     n = len(poly)
     for i in range(n):
@@ -65,10 +68,7 @@ def _extrude_building(ax, sim: Simulation, b: Building, wall_color, roof_color) 
         x1, y1 = poly[(i + 1) % n]
         walls.append([(x0, y0, base), (x1, y1, base), (x1, y1, top), (x0, y0, top)])
     ax.add_collection3d(Poly3DCollection(walls, facecolor=wall_color, edgecolor="#cbd5e1",
-                                         linewidths=0.3, alpha=0.95))
-    roof = [[(x, y, top) for x, y in poly]]
-    ax.add_collection3d(Poly3DCollection(roof, facecolor=roof_color, edgecolor="#cbd5e1",
-                                         linewidths=0.3, alpha=0.95))
+                                         linewidths=0.3, alpha=0.85))
 
 
 def _draw_ground_polys(ax, sim: Simulation) -> None:
@@ -88,7 +88,7 @@ def _draw_base(ax, sim: Simulation, show_obstacles=True) -> float:
     if show_obstacles:
         _draw_ground_polys(ax, sim)
     for b in sim.buildings:
-        _extrude_building(ax, sim, b, wall_color="#8a91a0", roof_color="#5b6270")
+        _extrude_building(ax, sim, b, wall_color="#8a91a0")
     # ODs
     for od in sim.ods:
         if od is None:

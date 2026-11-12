@@ -32,7 +32,8 @@ from pedsim.viewer import Viewer  # noqa: E402
 import build_dataset  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TEXT = "/workspace/text"
+# Original Java DXF scene lives in <repo>/text (env var overrides for portability).
+TEXT = os.environ.get("PEDSIM_TEXT", os.path.abspath(os.path.join(HERE, "..", "..", "text")))
 DATA = os.path.join(HERE, "data")
 
 
@@ -108,7 +109,12 @@ def demo_script(viewer: Viewer):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scene", choices=["dxf", "gobekli"], default="dxf")
+    ap.add_argument("--scene", choices=["cluster", "dxf", "gobekli"], default="cluster",
+                    help="cluster = the Tas Tepeler two-scale app (start here)")
+    ap.add_argument("--save-dir", default=None,
+                    help="where versioned scene saves go (default: cwd)")
+    ap.add_argument("--cellsize", type=float, default=250.0,
+                    help="cluster grid resolution in metres")
     ap.add_argument("--demo", action="store_true", help="run the self-driving demo")
     ap.add_argument("--frames", type=int, default=None, help="auto-quit after N frames")
     ap.add_argument("--duration", type=float, default=None,
@@ -119,12 +125,21 @@ def main() -> None:
     args = ap.parse_args()
 
     site = None
-    if args.scene == "gobekli":
+    app = None
+    if args.scene == "cluster":
+        from pedsim import scenes
+
+        print("building the Tas Tepeler cluster scene...")
+        app = scenes.build_app(save_dir=args.save_dir or os.getcwd(),
+                               cellsize=args.cellsize,
+                               progress=lambda m: print("  " + m))
+        sim = app.cluster.sim()
+    elif args.scene == "gobekli":
         sim, site = build_gobekli_scene()
     else:
         sim = build_dxf_scene()
 
-    viewer = Viewer(sim, site=site, title=f"pedsim viewer [{args.scene}]")
+    viewer = Viewer(sim, site=site, app=app, title=f"pedsim viewer [{args.scene}]")
     script = demo_script(viewer) if args.demo else None
     viewer.run(duration=args.duration, max_frames=args.frames, script=script,
                record_dir=args.record_dir, record_fps=args.record_fps)

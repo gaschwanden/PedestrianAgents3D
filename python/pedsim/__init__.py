@@ -29,6 +29,10 @@ from .simulation import (
     ANALYSIS_TRACES_O,
     Simulation,
 )
+from . import maps, paleo, plans, scenes, sites
+from .app import Scale, Scene, TwoScaleApp
+from .layers import Layer, LayerStack
+from .rivers import River, Season
 from .topography import TerrainCost, Topography
 from .traces import Trace
 
@@ -41,6 +45,18 @@ __all__ = [
     "OD",
     "Topography",
     "TerrainCost",
+    "Layer",
+    "LayerStack",
+    "River",
+    "Season",
+    "Scale",
+    "Scene",
+    "TwoScaleApp",
+    "sites",
+    "paleo",
+    "scenes",
+    "plans",
+    "maps",
     "ArchaeologicalSite",
     "SiteFeature",
     "load_site",
@@ -62,4 +78,4 @@ __all__ = [
     "ANALYSIS_TRACES_O",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

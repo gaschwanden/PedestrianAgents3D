@@ -33,6 +33,17 @@ directly:
 See [`python/README.md`](python/README.md) for the full feature-parity table,
 install steps, and demos (`examples/run_features.py`, `examples/run_demo.py`).
 
+The same Python package now carries the research layer in
+[`docs/REQUIREMENTS-research-features_2.md`](docs/REQUIREMENTS-research-features_2.md):
+chronology and building phases, population and tasks, a gathering calendar,
+scenario files with run records, ensembles, the Taş Tepeler network, a regional
+obsidian fit, field-track calibration, and GIS export. The desktop viewer has a
+Research tab. A field page lives in `web/` (Java-style red tools, pitched map, cluster and
+village packs) and is served with `python -m pedsim serve` from the `python/`
+directory. The decisions behind the defaults, and the parts that are still
+partial, are in section 15 and section 17 of that catalogue. The model
+description is [`docs/ODD.md`](docs/ODD.md).
+
 ## Project layout
 
 | Path | Description |

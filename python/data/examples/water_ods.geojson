@@ -1,0 +1,32 @@
+{
+  "type": "FeatureCollection",
+  "comment": "Schematic, not surveyed. VERIFY against the site plans before use.",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Göbeklitepe cistern (schematic)",
+        "kind": "water",
+        "tags": ["cistern"],
+        "site": "Göbeklitepe",
+        "source": "",
+        "confidence": "assumption",
+        "note": "Position is a placeholder near the published site point, not a surveyed cistern."
+      },
+      "geometry": {"type": "Point", "coordinates": [38.9214, 37.2234]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Karahantepe pools (schematic)",
+        "kind": "water",
+        "tags": ["cistern"],
+        "site": "Karahantepe",
+        "source": "",
+        "confidence": "assumption",
+        "note": "The rock-cut water system is described as ~500 m north of the site. This point is only a reminder of that, not a survey."
+      },
+      "geometry": {"type": "Point", "coordinates": [39.3036, 37.0970]}
+    }
+  ]
+}

@@ -43,6 +43,17 @@ features to their Python home.
 - **Topography-aware routing** (`topography.Topography` + `TerrainCost`): a
   slope-weighted Dijkstra using **Tobler's hiking function**, so uphill costs
   effort and agents avoid/contour around hills.
+- **Weighted landscape layers** (`layers.Layer` + `LayerStack`): rivers, scrub,
+  marsh or rasterised walls as named, separately re-weightable influences on
+  movement, viewable and adjustable live in the viewer.
+- **Seasonal rivers** (`rivers.River` + `Season`): watercourses that are both an
+  obstacle to cross and an attractor to follow, and that change between the two
+  with the season — a dry bed in summer, a wall in the spring melt.
+- **Two scales in one app** (`app.TwoScaleApp` + `scenes`): the settlement
+  cluster, where relief and water drive the routes, and the individual village,
+  where walls do — navigate between them, with prompted, versioned saves.
+- **Real georeferenced input** (`geo`): Copernicus DEM tiles and HydroRIVERS
+  hydrography resampled into the simulation's local metric frame.
 - **Simple archaeological importer** (`load_site`): tag outlines as
   `source`/`sink`/`building`/`wall`.
 - **Terrain relief in the 3D view** — the Java ground plane was flat.
@@ -65,11 +76,68 @@ becomes a candidate. A weighted random draw favouring the **longest clear line
 of sight** picks the waypoint it heads for (local search fallback, else "lost").
 This produces natural, wandering, sight-line-driven crowds.
 
+One consequence matters when you use friction (below): the cost field alone
+cannot deflect anybody, because agents beeline to the farthest *visible* cheaper
+cell. So each sight-line also accumulates the **extra cost of the going it
+crosses** (`NavGrid.step_penalty`) and a waypoint is only accepted when the cost
+it saves covers that. Without rough ground the penalty is zero and the rule
+reduces to the original one, so flat scenes behave exactly as before.
+
 ## Topography (Tobler's hiking function)
 
 With a `Topography` attached, per-step cost is `horizontal_distance / speed`
 where `speed = base·exp(-slope_factor·|slope + slope_offset|)`. Steeper than
 `impassable_slope` is blocked. Raise `slope_factor` to avoid hills more strongly.
+
+The cost is **directional**: `dz` is the rise in the direction actually walked,
+so climbing a terrace edge and dropping off it cost different amounts (Tobler's
+curve peaks at a gentle *downhill*, `slope = -slope_offset`). `max_ascent_slope`
+and `max_descent_slope` set the two limits independently, for ground you can
+scramble down but not climb.
+
+## Landscape layers (friction, blocking, elevation)
+
+Beyond walls, what pedestrians feel underfoot is a sum of influences: a river,
+marsh, thick scrub, a rasterised wall line. Each is a named `Layer` on the
+grid's `LayerStack`, combined additively:
+
+```
+friction = 1 + Σ weightᵢ · dataᵢ        # kind="friction"
+blocked  = any(dataᵢ > 0)               # kind="block"   (kind="info" = display only)
+```
+
+```python
+import numpy as np
+from pedsim.layers import Layer
+
+river = np.zeros((sim.grid.nx, sim.grid.ny))
+river[:, 34:40] = 1.0          # the channel: expensive but crossable
+river[20:26, 34:40] = 0.05     # a ford
+sim.add_layer(Layer("river", river, weight=12.0, color=(80, 150, 255)))
+sim.set_layer_weight("river", 6.0)     # re-weights and re-routes
+```
+
+`data` is normally 0..1 (`Layer.normalise()`); `inf` is impassable and `weight=0`
+disables a layer without removing it. Which solver builds the cost field depends
+on what is present:
+
+| present | solver |
+|---|---|
+| topography | slope-weighted Dijkstra (directional up/down) |
+| friction only | friction-weighted flood fill — **each cell adds its friction, not 1** |
+| neither | the faithful uniform-cost BFS flood fill |
+
+In the viewer, the **Layers** row of the control pane lists the stack followed by
+read-only views of what the solvers actually consume — `friction` (the combined
+array), `blocked`, `elevation` and `cost` (the live cost field) — plus `off`.
+With the cursor **over the control pane**:
+
+- **wheel** — choose which layer is drawn (`L` / `Shift+L` cycle too)
+- **shift+wheel** — change the selected layer's weight; routes rebuild immediately
+- **ctrl+wheel** — overlay opacity
+
+Weights show on the buttons (`river x2.5`) and in the HUD, so you can dial a
+river's cost up and down and watch the crossing points move.
 
 ## Interactive viewer
 
@@ -79,16 +147,116 @@ and supports pan/zoom, analysis-mode switching, click editing and an isovist
 viewpoint:
 
 ```bash
-pip install pygame
+python examples/run_viewer.py                    # two-scale Taş Tepeler app (default)
 python examples/run_viewer.py --scene dxf        # original scene
-python examples/run_viewer.py --scene gobekli    # topography scene
+python examples/run_viewer.py --scene gobekli    # single topography scene
 ```
 
-Controls: `SPACE` play/pause · `.` step · `[`/`]` speed · arrows / right-drag
-pan · wheel or `+`/`-` zoom · `F` fit · `0`-`5` analysis modes · `C` reset
-analysis · `O` add source-OD · `K` add sink-OD · `X` delete (OD/building) ·
-`B` draw building (click, `ENTER` to close) · `I` isovist follows mouse ·
-`V` pan tool · `H` help · `Q`/`ESC` quit.
+### Layout
+
+A **top bar** carries the scale breadcrumb (and the `< cluster` button when you
+are inside a village), the settlement you have selected, the current **season**,
+and an `unsaved edits` marker. A **tabbed control pane at the bottom** holds
+every action as a clickable button — all the same width, so the pane reads as a
+grid rather than a ragged row:
+
+| Tab | Buttons |
+| --- | --- |
+| **Analysis** | none · path overlap · facade vis · facade group · traces · traces group · reset analysis · reset all |
+| **Edit** | source/sink OD · OD weight · delete OD · add/move/height/delete building · add/move/delete obstacle · pan-select |
+| **Water** | add river · add ford · delete river · toggle flow · season › · dry · normal · spring floods |
+| **Layers** | one button per landscape layer, then `terrain map` · `elevation` · `friction` · `blocked` · `cost` · `off` |
+| **View** | fit view · isovist · top-down · ¾ view · rotate left/right · help |
+| **Data** | save scene · load scene · versions · save/load ODs |
+| **Research** | chronology · time window · undated policy · month · phases by time · task filter · assign phase · one button per phase |
+
+`TAB` cycles tabs. The active mode/tool is highlighted and actions report status
+just above the pane.
+
+Add/height/weight tools apply on click; *move* grabs an item then drops it on the
+next click; *add* (building/obstacle/river) collects vertices. **Close the shape**
+by clicking near the first vertex (a ring marks the snap target — it turns green
+when you're within range), by **double-clicking**, or by pressing `ENTER`. A
+river is a polyline, so two points are enough and the ends are not joined.
+
+### Two scales: cluster → village
+
+The viewer starts at the **settlement cluster** — the whole Taş Tepeler group
+over ~80 km, built from the real Copernicus DEM and HydroRIVERS data, with every
+usable site from the catalogue drawn as a labelled marker. A **green ring** means
+that site has a detailed map; grey means it does not, and the interface says so
+rather than opening an empty scene.
+
+Click a settlement to select it, **double-click** (or press the top-bar button)
+to drop into its **village scale**, where walls and buildings are the obstacles
+rather than the landscape. `< cluster` or `ESC` goes back.
+
+Each scene is built once and cached, so a round trip keeps both your edits and
+the accumulated analysis.
+
+### Saving, with versions
+
+Edits mark the scene dirty. Leaving a scale — or quitting — **asks before
+discarding**: `save` / `discard` / `cancel` (or `Y` / `N` / `ESC`). `Ctrl+S`
+saves at any time.
+
+Saves are versioned. `save scene` writes `<scene>.geometry.json` and rolls the
+file it replaced into `<scene>.v001.json`, `v002`, … keeping the last 20. A
+reconstruction is an interpretation, and the one you want back is usually the
+one you just overwrote:
+
+```python
+sim.save_geometry_versioned("gobeklitepe.geometry.json")  # -> "...v003.json" archived
+Simulation.list_versions("gobeklitepe.geometry.json")     # oldest first
+```
+
+### Seasonal rivers
+
+Most watercourses in the Şanlıurfa steppe are seasonal, so the same channel is a
+dry walkable bed in late summer, a costly wade at normal flow, and an impassable
+barrier in the spring melt. The **season** button (or `N`) cycles
+`dry → normal → spring floods`, re-rasterising every river and re-routing:
+
+| Season | Seasonal course | Perennial course |
+| --- | --- | --- |
+| dry | disappears — just ground | 40 % of its normal crossing cost |
+| normal | 70 % crossing cost, fords usable | full crossing cost |
+| spring floods | **blocks** | **blocks**, fords submerged |
+
+A river is both an obstacle and an attractor: the channel *adds* friction while
+the bank corridor *subtracts* it, so routes hug the water where following it is
+as useful as crossing it. **Fords** are cheap gaps in the channel — the places
+traffic funnels through. Add them with the *add ford* tool by clicking on a
+channel; *toggle flow* switches a river between seasonal and perennial.
+
+```python
+sim.add_river([(150, 0), (150, 300)], name="Mucid Dere", width=24,
+              crossing_cost=6.0, attraction=0.3)
+sim.add_ford(sim.rivers[0], 150, 60)
+sim.set_season(Season.SPRING_FLOOD)
+```
+
+### 3D and draw order
+
+You can **orbit the scene in 3D** (like the Java OpenGL camera): **middle-mouse
+drag** (horizontal = yaw, vertical = tilt) or **Shift+arrows** (Left/Right yaw,
+Up/Down tilt). As you tilt, the ground plane (terrain, heatmaps, footprints)
+foreshortens and **buildings extrude into shaded prisms**, drawn far-to-near so
+nearer walls occlude. Everything rotates together; yaw/tilt are shown in the HUD
+and `F` resets pan/zoom/orbit to a top-down view.
+
+**Buildings are the top layer** — they are drawn after the agents, traces and
+ODs, so a pedestrian behind a wall is hidden by it. There is no always-on
+background raster: the shaded relief map is the `terrain map` entry in the
+**Layers** tab, off by default so analysis is never fighting a coloured
+backdrop you cannot switch off.
+
+Keyboard shortcuts still work: `SPACE` play/pause · `.` step · `[`/`]` speed ·
+arrows / right-drag pan · Shift+arrows or middle-drag orbit (yaw + tilt) · wheel
+or `+`/`-` zoom · `F` fit/reset · `0`-`5` analysis modes · `C` reset analysis ·
+`O` add source-OD · `K` add sink-OD · `X` delete · `B` draw building (`ENTER` to
+close) · `I` isovist follows mouse · `V` pan tool · `L` cycle layer · `TAB` next
+tab · `N` next season · `Ctrl+S` save · `H` help · `ESC` back a scale · `Q` quit.
 
 For headless capture, render a scripted session to frames and encode:
 
@@ -98,11 +266,249 @@ python examples/run_viewer.py --scene dxf --demo --duration 24 \
 ffmpeg -framerate 25 -i /tmp/frames/%05d.png -pix_fmt yuv420p viewer.mp4
 ```
 
-## Install & run
+## Site catalogue & palaeo-terrain (Göbekli Tepe / Taş Tepeler)
+
+`pedsim.sites` is a sourced catalogue of 16 Pre-Pottery Neolithic sites around
+Şanlıurfa — the official Taş Tepeler twelve plus Nevalı Çori, Hamzan Tepe, Taşlı
+Tepe and Kurt Tepesi. Every entry carries **how well its coordinate is actually
+known**, because several are shakier than they look:
+
+```python
+from pedsim import sites
+sites.located(usable_only=True)   # 13 sites safe to route on
+sites.data_gaps()                 # Sefertepe (conflicting), Mendiktepe, Söğüt Tarlası
+sites.occupied_at(9000)           # who was there in 9000 cal BC
+sites.find("Gre Hut")             # alias lookup -> Ayanlar Höyük
+```
+
+Three entries need a decision before cluster-scale work: **Sefertepe** has two
+published coordinates 1.6 km apart (both are kept, as `lat/lon` and `alt_coord`),
+and **Mendiktepe** and **Söğüt Tarlası** have no published coordinate at all.
+Note also that the `Gürcütepe` value circulating on Wikidata and tour sites is
+actually Kazane Höyük's — a different, Bronze Age site; there's a regression test
+guarding against it being "fixed" back.
+
+`pedsim.paleo` strips post-10 ka valley aggradation from a modern DEM, using the
+14 radiocarbon-dated Culap Suyu cores of Nykamp et al. 2021 (open access):
+
+```python
+from pedsim import paleo
+paleo_dem, uncertainty = paleo.correct_dem(dem, eastings, northings)  # UTM 37N
+```
+
+Roughly 0 m on the plateaus, 0.6–0.8 m at slope toes, ~2–3 m across the piedmont
+and 1.5–5.3 m in the floodplain — so the correction bites exactly where it
+changes routing, since only the valley figures clear GLO-30's 2.2 m vertical
+RMSE (`paleo.meaningful()`). Cells with no basis for a correction come back
+**unchanged with infinite uncertainty** rather than a quiet zero.
+
+Scope limits are documented in the module and worth reading before trusting
+output: there is **no** Holocene data for the Harran plain (and Rosen's Kazane
+sequence hints parts of it were eroded rather than buried, so even the sign is
+unknown); a modern DEM at Nevalı Çori returns the Atatürk reservoir surface, not
+terrain; palaeochannel positions at 10 ka are unconstrained, so rivers should not
+be moved; and 10–8 ka is treated as geomorphically stable, which is the published
+conclusion as well as the simpler model.
+
+## Importing published site plans (`pedsim.plans`)
+
+At village scale the obstacles are walls, and for these sites the walls exist as
+**ink on paper** — figure plates in excavation reports, drawn by hand, none of
+them georeferenced. `pedsim.plans` pins such a drawing to the ground with a
+**similarity transform** (scale, rotation, translation) you supply, then samples
+the ink onto the simulation grid.
+
+Two ways to pin it, matching what plans actually carry:
+
+```python
+from pedsim.plans import ControlPoint, Georeference, SitePlan, add_plan_to
+
+# (a) two points whose ground position you know — accurate, solves scale+rotation
+geo = Georeference.from_control_points(
+    ControlPoint(pixel=(412, 908), world=(0, 0),   label="excavation datum"),
+    ControlPoint(pixel=(1180, 655), world=(60, 20), label="grid E60/N20"))
+
+# (b) a scale bar and a north arrow — what most published plates give you
+geo = Georeference.from_scale_bar(
+    ControlPoint(pixel=(450, 450), world=(0, 0), label="plate centre"),
+    bar_pixels=200, bar_metres=20, north_deg=0)
+
+plan = SitePlan.load("plate.png", geo, source="Author 2024, fig. 7")
+add_plan_to(sim, plan)                       # walls become impassable
+add_plan_to(sim, plan, blocking=False, cost=3.0)   # or merely rough going
+```
+
+![imported plan](../out/doc_plan_import.png)
+
+A similarity transform is deliberate. Affine or projective fits would absorb the
+draughtsman's distortion into a skew with no physical meaning, and let one
+badly-placed control point silently stretch the plan. A rigid scale-and-rotate
+either fits or visibly does not. Check it with a **third** point the fit never
+saw — `geo.check([...])` returns the RMS ground error in metres; a two-point fit
+is exact on its own points and tells you nothing.
+
+The ink becomes a **layer**, not building footprints. Tracing a hand-drawn wall
+into a clean polygon is a separate and unreliable problem; a mask says exactly
+what the drawing says — "something is here" — without inventing corners the
+draughtsman never drew. And because it is a layer it stays switchable: an
+imported plan is an interpretation, so you can re-weight or remove it.
+
+`plan.covered(xs, ys)` distinguishes **"the plan says nothing is here"** from
+**"the plan does not reach here"**. Cells outside the image are never imported as
+open ground.
+
+## Which settlements actually have a plan? (`pedsim.maps`)
+
+A village scene without walls is just a cropped DEM. `pedsim.maps` records, for
+every catalogue site, whether a **usable architectural plan, geophysical raster
+or 3D model** exists, and whether it can be pinned with :mod:`pedsim.plans`.
+It is a finding aid: the drawings stay with their publishers.
+
+| Site | Best source today | Import? |
+| --- | --- | --- |
+| **Göbeklitepe** | Clare 2024 *Documenta Praehistorica* 51, Fig. 4 (Kinzel / DAI) — enclosures A–D, trenches L09-* | yes, via the 10 m grid |
+| **Nevalı Çori** | Hauptmann 1999 level plans I–III (reproduced in Ercoskun); site now flooded | yes, with two control points |
+| **Harbetsuvan Tepesi** | Tada et al. 2026 *Archaeological Prospection* magnetometry/GPR + [Zenodo rasters](https://zenodo.org/records/18979006) | as geophysics, not excavated walls |
+| Karahantepe | Karul 2021 TAED 82 — **photographs and a section**, not a measured site plan | not yet |
+| Sayburç | Özdoğan 2023 *Antiquity* — drone photo of one building | no |
+| Çakmaktepe | Şahin 2025 *Arkeoloji Dergisi* — photos of round houses; line plans likely only in KST | no (photos) |
+| Sefertepe, Ayanlar, Hamzan, Gürcütepe, Yeni Mahalle, Taşlı, Kurt | survey notes or paywalled DAI soundings | no verified plan |
+| Yoğunburç, Mendiktepe | excavation only just started (2023–26) | no plan yet |
+| Söğüt Tarlası | still unlocated | no |
+
+**3D.** A free Sketchfab mesh of the Göbekli hollow exists (rmark, ~400 photos,
+3.3 M triangles) — useful as a visual check, not as survey walls. No
+downloadable TLS/Open Heritage dataset for these sites was verified.
+
+**Terrain better than GLO-30.** For Nevalı Çori the modern DEM is reservoir
+water. The [CORONA Atlas](https://corona.cast.uark.edu/) has georeferenced
+1960s ~1.8 m imagery of the pre-Atatürk-Dam valley, free for non-commercial
+use. TanDEM-X 12 m and Copernicus EEA-10 exist but need a research proposal /
+restricted access.
+
+```python
+from pedsim import maps
+maps.has_village_plan("Göbeklitepe")   # True
+maps.importable("Harbetsuvan Tepesi")  # geophysics + Zenodo URL
+maps.summary()                         # one line per site
+```
+
+First import to try: **Clare 2024 Fig. 4**. Open-access, labelled DAI 10 m
+squares, covers the four special buildings the village simulation is actually
+about. Pin two opposite trench corners with :class:`~pedsim.plans.ControlPoint`
+and `add_plan_to(sim, plan)`.
+
+## Georeferenced data (`pedsim.geo`, `pedsim.scenes`)
+
+`pedsim.geo` bridges real data into the simulation's flat local metric frame.
+`LocalFrame` pins an origin and converts via the right UTM zone (37N here), so
+simulation distances are true metres:
+
+```python
+from pedsim import geo, sites
+
+frame = geo.LocalFrame.centred_on(sites.bounds(usable_only=True))
+topo   = geo.load_dem(geo.dem_tiles("data/raw/Copernicus_DSM_*.tif"),
+                      frame, bounds, cellsize=250.0)
+rivers = geo.load_rivers("data/raw/HydroRIVERS_v10_eu_shp/HydroRIVERS_v10_eu.shp",
+                         frame, bbox, clip=bounds)
+ods    = geo.site_ods(frame, sites.located(usable_only=True))
+```
+
+DEM tiles are resampled by inverse mapping — every destination cell centre is
+converted to lon/lat and sampled — so the output lands exactly on the grid the
+simulation wants. HydroRIVERS reaches become `River` objects, with
+`DIS_AV_CMS ≥ 0.5` read as perennial and everything else as seasonal.
+
+`pedsim.scenes` assembles the study itself:
+
+```python
+from pedsim import scenes
+app = scenes.build_app(save_dir=".")   # cluster + the village scenes
+sim = app.cluster.sim()                # ~313×257 cells at 250 m, 13 sites, 20 rivers
+```
+
+`cluster_scene()` builds the 80 km landscape (GLO-30 terrain, palaeo-corrected
+where the Culap cores allow, HydroRIVERS watercourses widened to the valley
+floors they really are at this resolution); `village_scene(name)` crops a 1.2 km
+box at **2 m** cells around one site, with perimeter gate ODs, ready for a wall plan.
+Village scenes are offered only for sites with a **published** coordinate — one
+centred on an approximate point would imply a precision the survey data does not
+support. Both fall back to synthetic relief if the downloads are absent, so the
+viewer still runs on a fresh clone.
+
+Requires `rasterio`, `pyproj`, `shapely` and `pyshp` (all in
+`requirements.txt`), imported lazily so the rest of the package works without
+them. Data downloads live in `data/raw/` and are gitignored.
+
+## Research layer
+
+The catalogue is [`docs/REQUIREMENTS-research-features_2.md`](../docs/REQUIREMENTS-research-features_2.md).
+The model description generated from the scenario defaults is
+[`docs/ODD.md`](../docs/ODD.md).
+
+A bare `Simulation` leaves chronology off, so an old scene draws the same trips
+as before. A scenario file turns it on. Config tables live in `data/config/`
+(population, tasks, calendar, obsidian sources, the synthetic scenario). Dates
+are calibrated BC, larger meaning earlier.
 
 ```bash
 cd python
-pip install -r requirements.txt
+python -m pedsim.scenario --odd          # rewrite ../docs/ODD.md
+python -m pedsim run data/config/scenario_synthetic.yaml --out ../runs
+python -m pedsim hypotheses list
+python -m pedsim hypotheses run R G --seeds 1
+python -m pedsim pack                    # scene pack, and a copy for web/
+python -m pedsim serve                   # http://0.0.0.0:8000  field client
+```
+
+`web/` is the field page. It still does **not** run a second simulator: it plays
+packs that `pedsim pack` writes (`cluster.json` for the Taş Tepeler settlements
+and inter-site ODs, `scene.json` for the village / settlement at **2 m** cells).
+Playback lerps agent positions between packed steps so walkers move slowly and
+smoothly rather than jumping cell-to-cell. Village packs run long enough for
+agents to finish origin→destination trips on the 2 m grid. The chrome copies the Java
+tool: a red button grid (P / F / OD+ / OD- / REC / …; hover for function tips), a tilted 3D map, and
+Shift-drag pitch. Chronology uses rolling bars; **Season** is dry / normal /
+spring floods. Google satellite or Esri imagery is the default online basemap: `pedsim serve`
+proxies those tiles (they have no WebGL CORS headers of their own) and the
+service worker never caches them. **OD+** places destinations by tapping the
+map; **REC** records a track from GPS or map taps when GPS is blocked.
+**Ask the laptop** (`HUB`) posts a short ensemble to `pedsim serve`.
+
+The desktop Edit tab can box-select buildings (two clicks) and assign them to a
+phase. **B circle** / **B rect** place a round or rectangular house in three
+taps (centre/rim or corner/corner, then the door); an entrance OD is created
+outside the door. The field client has the same tools as **B○** / **B▭**.
+With a regional scene loaded, Escape goes up one level and the breadcrumb reads
+`Region › Cluster › Göbeklitepe`.
+
+## Install & run
+
+Use a virtual environment (required on macOS with Homebrew Python, which blocks
+global `pip`). Run these from the **repo root**:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r python/requirements.txt
+```
+
+> The viewer dependency is `pygame-ce` (a drop-in fork of pygame that ships
+> wheels for Python 3.13/3.14; it still imports as `pygame`). Plotting/3D output
+> works without it.
+
+Then run the examples from the `python/` folder (they locate `text/*.dxf`
+automatically; override with `PEDSIM_TEXT=/path/to/text` if needed):
+
+```bash
+cd python
+
+# 0) The two-scale Taş Tepeler app (start here). Needs data/raw/ downloaded;
+#    without it the scenes fall back to synthetic relief.
+python examples/run_viewer.py                       # ~15 s to build the cluster
+python examples/run_viewer.py --cellsize 400        # coarser and faster
+python examples/run_viewer.py --save-dir ../out     # where versioned saves go
 
 # 1) Full feature showcase on the ORIGINAL DXF scene (text/*.dxf) + 3D:
 python examples/run_features.py out
@@ -116,7 +522,11 @@ python examples/run_demo.py out
 
 # Tests:
 python tests/test_core.py
-python tests/test_features.py     # or: pytest tests
+python tests/test_features.py
+python tests/test_layers.py
+python tests/test_sites_paleo.py
+pytest tests/test_rivers_app.py tests/test_viewer_ui.py tests/test_research.py tests/test_outputs.py
+#   or the whole suite: pytest tests
 ```
 
 ### Load the original scene programmatically
@@ -148,12 +558,27 @@ sim.run(400)
 | --- | --- |
 | `pedsim/geometry.py` | point-in-polygon, rasterisation, area/winding, segment intersection, polygon split |
 | `pedsim/dxf.py` | DXF importer (lines, polylines, meshes → footprints) |
-| `pedsim/topography.py` | elevation raster + Tobler slope-cost model |
-| `pedsim/grid.py` | navigation grid, BFS/Dijkstra cost fields, occupancy/visibility, partial update |
+| `pedsim/topography.py` | elevation raster + directional Tobler slope-cost model |
+| `pedsim/layers.py` | named, re-weightable landscape layers (friction / blocking / display) |
+| `pedsim/rivers.py` | watercourses as seasonal cost/attraction/blocking features, with fords |
+| `pedsim/sites.py` | sourced Taş Tepeler / PPN site catalogue with coordinate confidence |
+| `pedsim/paleo.py` | early Holocene terrain correction from the dated Culap Suyu cores |
+| `pedsim/geo.py` | CRS handling, GeoTIFF DEM and shapefile hydrography → local metric frame |
+| `pedsim/plans.py` | published site plans georeferenced by 2 control points or a scale bar |
+| `pedsim/maps.py` | sourced catalogue of which settlements actually have a plan |
+| `pedsim/scenes.py` | the cluster and village scenes built from the real downloads |
+| `pedsim/app.py` | two-scale navigation, per-scene edit tracking, versioned saves |
+| `pedsim/grid.py` | navigation grid, BFS / weighted-fill / Dijkstra cost fields, occupancy/visibility, partial update |
 | `pedsim/footprint.py` / `building.py` | footprint (+ facade segments) and extruded building/obstacle |
 | `pedsim/agent.py` | vision-cone steering, movement, occupancy, trips |
 | `pedsim/traces.py` / `isovist.py` / `landmark.py` / `modules.py` | analysis + prefab features |
 | `pedsim/simulation.py` | scene/loop, analysis modes, editing API, DXF/site loading, IO |
+| `pedsim/chronology.py`, `phases.py`, `population.py`, `tasks.py`, `calendar.py`, `research.py` | dates, phases, classes, tasks, month, and the switches on a simulation |
+| `pedsim/templates.py` | circle / rectangle building stamps with a door entrance OD |
+| `pedsim/scenario.py`, `ensemble.py`, `hypotheses.py`, `sensitivity.py` | scenario files, run records, multi-seed runs, residential vs gathering |
+| `pedsim/network.py`, `regional.py` | travel times, graph metrics, gravity, obsidian distance decay |
+| `pedsim/calibration.py`, `tracks.py`, `gis_export.py`, `webmap/` | field tracks, Tobler fit, shapefile/GeoPackage/QGIS, density rasters |
+| `pedsim/pack.py`, `serve.py` | offline scene pack and the local field-client server |
 | `pedsim/viz.py` / `viz3d.py` | 2D analysis rendering + 3D rendering & animation |
 | `examples/` | dataset builder, `run_demo.py` (topography), `run_features.py` (everything) |
-| `tests/` | `test_core.py`, `test_features.py` |
+| `tests/` | core, features, layers, sites, rivers, viewer, plans, maps, `test_research.py`, `test_outputs.py` |

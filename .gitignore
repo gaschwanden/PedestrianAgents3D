@@ -3,3 +3,15 @@
 
 # Runtime / log files
 *.log
+
+# Python virtualenv
+.venv/
+
+# Downloaded geodata (large, redistributable only under source licences)
+data/raw/
+data/derived/
+
+# Field recordings and built offline packs (large, and the tracks are private)
+python/data/packs/
+python/data/field/
+python/data/tracks_raw/

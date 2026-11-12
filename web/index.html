@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <title>pedsim field</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="vendor/maplibre-gl.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="stage">
+    <div id="map" role="region" aria-label="map"></div>
+    <div id="hud">
+      <div id="toolbar" class="java-grid" aria-label="tools"></div>
+      <div id="tool-tip" class="tool-tip" hidden aria-hidden="true"></div>
+      <div id="chrome">
+        <div class="brand">
+          <strong data-i18n="title">pedsim field</strong>
+          <span id="scale-label">Cluster</span>
+          <span id="net" data-i18n="online">Online</span>
+        </div>
+        <label class="lang"><span data-i18n="language">Language</span>
+          <select id="lang">
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+          </select>
+        </label>
+      </div>
+      <aside id="panel">
+        <p class="hint" id="blurb" data-i18n="packed"></p>
+        <div class="row">
+          <span data-i18n="scale">Scale</span>
+          <div class="pair">
+            <button type="button" id="scale-cluster" class="active" data-i18n="cluster">Cluster</button>
+            <button type="button" id="scale-village" data-i18n="village">Village</button>
+          </div>
+        </div>
+        <label class="row check"><input id="chrono" type="checkbox" checked>
+          <span data-i18n="chronology">Chronology</span>
+        </label>
+        <label class="row"><span data-i18n="earlier">Earlier (start BC)</span>
+          <div class="slider-line">
+            <input id="start" type="range" min="7000" max="12000" step="50" value="9500">
+            <output id="start-out">9500</output>
+          </div>
+        </label>
+        <label class="row"><span data-i18n="later">Later (end BC)</span>
+          <div class="slider-line">
+            <input id="end" type="range" min="7000" max="12000" step="50" value="8000">
+            <output id="end-out">8000</output>
+          </div>
+        </label>
+        <label class="row"><span data-i18n="season">Season</span>
+          <select id="season"></select>
+        </label>
+        <fieldset>
+          <legend data-i18n="phases">Phases</legend>
+          <div id="phases"></div>
+        </fieldset>
+        <label class="row"><span data-i18n="basemap">Basemap</span>
+          <select id="basemap">
+            <option value="satellite" data-i18n="satellite">Satellite</option>
+            <option value="google" selected data-i18n="google">Google satellite</option>
+            <option value="google-hybrid" data-i18n="googleHybrid">Google hybrid</option>
+            <option value="streets" data-i18n="streets">Streets</option>
+            <option value="none" data-i18n="none">None</option>
+          </select>
+        </label>
+        <label class="row"><span data-i18n="opacity">Opacity</span>
+          <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.7">
+        </label>
+        <label class="row check"><input id="log" type="checkbox">
+          <span data-i18n="log">Log scale</span>
+        </label>
+        <label class="row"><span data-i18n="cutoff">Hide below</span>
+          <input id="cutoff" type="range" min="0" max="0.9" step="0.05" value="0">
+        </label>
+        <label class="row"><span data-i18n="tilt">3D tilt</span>
+          <input id="tilt" type="range" min="0" max="70" step="1" value="45">
+        </label>
+        <h2 data-i18n="metrics">This view</h2>
+        <div id="metrics"></div>
+        <p class="hint" id="status" data-i18n="install"></p>
+      </aside>
+    </div>
+  </div>
+  <script src="strings.js"></script>
+  <script src="vendor/maplibre-gl.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

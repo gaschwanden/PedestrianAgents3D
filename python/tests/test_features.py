@@ -29,7 +29,10 @@ from pedsim.geometry import (
     split_polygon,
 )
 
-TEXT = "/workspace/text"
+TEXT = os.environ.get(
+    "PEDSIM_TEXT",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "text")),
+)
 HAVE_DXF = os.path.exists(os.path.join(TEXT, "GSite.dxf"))
 
 

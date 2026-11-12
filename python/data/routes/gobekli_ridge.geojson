@@ -1,0 +1,41 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "gobekli-ridge-transect",
+        "type": "transect",
+        "target_slopes": ["flat", "gentle up", "steep up", "steep down"],
+        "expected_duration_min": 90,
+        "access_notes": "Stay on the visitor paths and the public approach road. The excavation is fenced; do not enter it.",
+        "safety_notes": "Heat, no shade on the ridge, carry water. Do not fly a drone without a permit."
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [38.9225, 37.2218],
+          [38.9210, 37.2230],
+          [38.9195, 37.2242]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "gobekli-free-choice",
+        "type": "free_choice",
+        "expected_duration_min": 40,
+        "access_notes": "Public approach only. Start and end are outside the fenced excavation.",
+        "safety_notes": "Walk in daylight. Tell someone the route before you leave the vehicle."
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [38.9250, 37.2200],
+          [38.9180, 37.2260]
+        ]
+      }
+    }
+  ]
+}

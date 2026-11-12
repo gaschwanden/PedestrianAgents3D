@@ -20,7 +20,7 @@ agents prefer gentle, contour-following routes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Tuple
+from typing import Callable, Optional, Tuple
 
 import numpy as np
 
@@ -126,23 +126,41 @@ class TerrainCost:
         Slope at which walking is fastest is ``-slope_offset``.
     impassable_slope:
         Steps steeper than this (absolute rise/run) are treated as impassable.
+    max_ascent_slope, max_descent_slope:
+        Optional *directional* limits. Climbing and descending a scree slope or
+        a terrace edge are not equally feasible: a drop you can scramble down
+        may be unclimbable. Default to ``impassable_slope`` for both.
+
+    Directionality
+    --------------
+    The cost is **asymmetric**: walking A->B and B->A over the same pair of
+    cells costs different amounts, because ``dz`` flips sign. Tobler's curve
+    peaks at ``slope = -slope_offset`` (a gentle downhill), so descending is
+    cheaper than ascending and much cheaper than a steep climb. Callers must
+    therefore pass ``dz`` as the rise *in the direction the pedestrian actually
+    walks*.
     """
 
     base_speed: float = 1.0
     slope_factor: float = 3.5
     slope_offset: float = 0.05
     impassable_slope: float = 1.2
+    max_ascent_slope: Optional[float] = None
+    max_descent_slope: Optional[float] = None
 
     def speed(self, slope: float) -> float:
         return self.base_speed * np.exp(-self.slope_factor * abs(slope + self.slope_offset))
 
     def step_cost(self, dz: float, horizontal_dist: float) -> float:
         """Cost of walking one step of horizontal length ``horizontal_dist`` with
-        elevation change ``dz`` (positive = uphill). Returns ``inf`` if too steep.
+        elevation change ``dz`` (**positive = uphill, in the walking direction**).
+        Returns ``inf`` if the step is too steep to take.
         """
         if horizontal_dist <= 0:
             return float("inf")
         slope = dz / horizontal_dist
-        if abs(slope) > self.impassable_slope:
+        up = self.impassable_slope if self.max_ascent_slope is None else self.max_ascent_slope
+        down = self.impassable_slope if self.max_descent_slope is None else self.max_descent_slope
+        if slope > up or -slope > down:
             return float("inf")
         return horizontal_dist / self.speed(slope)

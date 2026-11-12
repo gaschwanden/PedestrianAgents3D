@@ -1,0 +1,13 @@
+# A small scene that runs without the Copernicus download.
+name: synthetic-demo
+scene: synthetic
+site: Göbeklitepe
+respect_chronology: false
+num_agents: 16
+# Long enough for gate↔gate trips at 2 m cells (~0.5 m/step wanders).
+steps: 900
+seed: 7
+gridsize: 2
+extent_m: 400
+population: ""
+tasks: ""

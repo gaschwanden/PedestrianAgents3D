@@ -36,7 +36,7 @@ from pedsim import viz, viz3d  # noqa: E402
 import build_dataset  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TEXT = "/workspace/text"
+TEXT = os.environ.get("PEDSIM_TEXT", os.path.abspath(os.path.join(HERE, "..", "..", "text")))
 DATA = os.path.join(HERE, "data")
 
 

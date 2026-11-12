@@ -49,6 +49,11 @@ class Agent:
         self.far_py = -1
         self.group = 0
         self.trace = None  # optional pedsim.traces.Trace
+        self.pclass = ""
+        self.task = ""
+        self.load_kg = 0.0
+        self.speed_factor = 1.0
+        self.day_minutes_used = 0.0
 
     # --------------------------------------------------------------- lifecycle
     def die(self, reason: int) -> None:
@@ -63,14 +68,23 @@ class Agent:
         """Assign a fresh origin/destination trip by weighted draw, and place the
         agent at the chosen origin. Returns False if no valid trip exists."""
         sim = self.sim
-        assigned = sim.draw_trip()
-        if assigned is None:
-            return False
-        o, d = assigned
+        if getattr(sim, "tasks_enabled", False) and getattr(sim, "task_model", None) is not None:
+            plan = sim.task_model.next_for(sim, self)
+            if plan is None:
+                return False
+            o, d = plan.origin, plan.dest
+            self.task = plan.task_id
+            self.load_kg = plan.load_kg
+        else:
+            assigned = sim.draw_trip()
+            if assigned is None:
+                return False
+            o, d = assigned
         grid = sim.grid
         self.origin = o
         self.target = d
         self.group = sim.ods[o].group
+        self._apply_class_speed()
         self.px = (sim.ods[o].x - grid.sx) / grid.gridsize
         self.py = (sim.ods[o].y - grid.sy) / grid.gridsize
         self.vx = 0.0
@@ -91,6 +105,21 @@ class Agent:
             sim.traces.append(self.trace)
             self.trace.update(sim)
         return True
+
+    def _apply_class_speed(self) -> None:
+        """Speed = scene speed × class factor × load factor (A8)."""
+        from .population import load_factor
+
+        sim = self.sim
+        k = getattr(sim, "load_k", 0.2)
+        max_load = 20.0
+        if getattr(sim, "population", None) is not None and self.pclass:
+            spec = sim.population.get(self.pclass)
+            if spec is not None:
+                self.speed_factor = spec.speed_factor
+                max_load = spec.max_load_kg
+        factor = load_factor(self.load_kg, max_load, k=k)
+        self.speed = sim.speed * self.speed_factor * factor
 
     # ------------------------------------------------------------------ vision
     def _cost_here(self, cost) -> float:
@@ -126,6 +155,7 @@ class Agent:
         candidates: list[tuple[int, int]] = []
         weights: list[float] = []
         accumulate = sim.accumulate_visibility
+        penalty = grid.step_penalty
 
         step = sim.radius_divider
         j_angle = angle
@@ -133,6 +163,8 @@ class Agent:
         while j_angle < end:
             cos_j = math.cos(j_angle)
             sin_j = math.sin(j_angle)
+            # cost of the rough going crossed so far along this sight-line
+            acc = 0.0
             for i in range(1, sim.cone_vision):
                 x = i * cos_j
                 y = i * sin_j
@@ -146,8 +178,13 @@ class Agent:
                     grid.add_visibility(pixx, pixy, self.group)
                 if not grid.walkable[pixx, pixy]:
                     break  # line of sight blocked by a wall
+                if penalty is not None:
+                    acc += penalty[pixx, pixy]
                 d = cost[pixx, pixy]
-                if math.isfinite(d) and d >= 0 and d < curr_d:
+                # Walking straight here costs the going along the way; only
+                # worth it if the cost saved covers it. With no rough ground
+                # ``acc`` is 0 and this is the original ``d < curr_d`` test.
+                if math.isfinite(d) and d >= 0 and d + acc < curr_d:
                     candidates.append((pixx, pixy))
                     weights.append(x * x + y * y)  # favour longer sight-lines
             j_angle += step
@@ -229,6 +266,8 @@ class Agent:
         if not grid.walkable[xx, yy]:
             return
         grid.add_occupancy(xx, yy, 1.0)
+        if hasattr(sim, "note_category"):
+            sim.note_category(xx, yy, self)
         if sim.blur_occupancy and 0 < xx < grid.nx - 1 and 0 < yy < grid.ny - 1:
             rex = self.px - xx
             b = sim.blur_decay

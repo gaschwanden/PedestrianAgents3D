@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .geometry import Polygon, point_in_polygon, rasterize_polygons_mask
+from .layers import Layer, LayerStack
 from .topography import TerrainCost, Topography
 
 _DIAG: List[Tuple[int, int, float]] = [
@@ -60,6 +61,9 @@ class NavGrid:
         topography: Optional[Topography] = None,
         terrain_cost: Optional[TerrainCost] = None,
         num_groups: int = 3,
+        friction: Optional[np.ndarray] = None,
+        blocked_mask: Optional[np.ndarray] = None,
+        layers: Optional["LayerStack"] = None,
     ):
         min_x, min_y, max_x, max_y = bounds
         self.min_x, self.min_y, self.max_x, self.max_y = min_x, min_y, max_x, max_y
@@ -81,6 +85,18 @@ class NavGrid:
         if topography is not None:
             self.elevation = topography.sample_grid(self.xs, self.ys)
 
+        # Landscape influences. ``friction``/``blocked_mask`` are a fixed base;
+        # ``layers`` is the named, re-weightable stack on top of it (rivers,
+        # vegetation, walls...). The effective arrays are recombined on demand.
+        self._base_friction = self._check_layer(friction, float, "friction")
+        self._base_blocked = self._check_layer(blocked_mask, bool, "blocked_mask")
+        self.layers = layers if layers is not None else LayerStack((self.nx, self.ny))
+        self.friction: Optional[np.ndarray] = None
+        self.extra_blocked: Optional[np.ndarray] = None
+        self.step_penalty: Optional[np.ndarray] = None
+        self._layers_version = -1
+        self._combine_layers()
+
         self.permablocked = np.zeros((self.nx, self.ny), dtype=bool)
         self.openspace = np.ones((self.nx, self.ny), dtype=bool)
         self.boundary = np.zeros((self.nx, self.ny), dtype=bool)
@@ -101,6 +117,103 @@ class NavGrid:
         self._cost_fields: Dict[int, np.ndarray] = {}
 
     # ------------------------------------------------------------------ build
+    def _check_layer(self, arr, dtype, name):
+        if arr is None:
+            return None
+        a = np.asarray(arr, dtype=dtype)
+        if a.shape != (self.nx, self.ny):
+            raise ValueError(
+                f"{name} must have shape {(self.nx, self.ny)}, got {a.shape}"
+            )
+        return a
+
+    def set_friction(self, friction: Optional[np.ndarray]) -> None:
+        """Replace the *base* friction and invalidate cached cost fields."""
+        self._base_friction = self._check_layer(friction, float, "friction")
+        self.refresh_layers(force=True)
+
+    def set_blocked_mask(self, blocked_mask: Optional[np.ndarray]) -> None:
+        """Replace the *base* blocked mask (rasterised walls / water)."""
+        self._base_blocked = self._check_layer(blocked_mask, bool, "blocked_mask")
+        self.refresh_layers(force=True)
+
+    def add_layer(self, layer: "Layer") -> "Layer":
+        """Add/replace a named landscape layer and refresh the derived arrays."""
+        self.layers.add(layer)
+        self.refresh_layers(force=True)
+        return layer
+
+    def _combine_layers(self) -> None:
+        """Fold the base arrays and the weighted layer stack into the effective
+        ``friction`` / ``extra_blocked`` arrays used by the solvers."""
+        lf = self.layers.friction() if self.layers is not None else None
+        lb = self.layers.blocked() if self.layers is not None else None
+        if self._base_friction is None:
+            self.friction = lf
+        elif lf is None:
+            self.friction = self._base_friction
+        else:
+            self.friction = self._base_friction * lf
+        if self._base_blocked is None:
+            self.extra_blocked = lb
+        elif lb is None:
+            self.extra_blocked = self._base_blocked
+        else:
+            self.extra_blocked = self._base_blocked | lb
+        self._layers_version = self.layers.version if self.layers is not None else -1
+        self._compute_step_penalty()
+
+    def _compute_step_penalty(self) -> None:
+        """Extra cost of entering a cell, over and above open flat going, in the
+        same units as the cost field.
+
+        The cost field on its own cannot deflect anybody: agents pick the
+        *farthest visible* cell that improves their cost, so with a clear line
+        of sight they wade straight across an expensive river instead of walking
+        to the ford. Accumulating this penalty along the sight-line lets them
+        compare "go straight through" against "the route the cost field knows",
+        and only beeline when the straight line is actually worth it.
+
+        The baseline is the *median* cell, not the theoretical best one, so only
+        ground that is unusually hard for this landscape costs anything: a river
+        or a scarp in otherwise open country, but not the ordinary slope of a
+        uniformly hilly one. That keeps ordinary scenes steering as they always
+        did and confines the effect to the obstacles it is meant to represent.
+
+        For slope the estimate is isotropic (from the local gradient magnitude)
+        -- good enough for choosing a waypoint; the routing itself stays
+        directional.
+        """
+        gsize = self.gridsize
+        if self.elevation is not None:
+            dzdx, dzdy = np.gradient(self.elevation, gsize)
+            slope = np.hypot(dzdx, dzdy)
+            cell = gsize / np.maximum(self.terrain_cost.speed(slope), 1e-9)
+            if self.friction is not None:
+                cell = cell * self.friction
+        elif self.friction is not None:
+            cell = np.array(self.friction, dtype=float)
+        else:
+            self.step_penalty = None
+            return
+        finite = np.isfinite(cell)
+        typical = float(np.median(cell[finite])) if finite.any() else 0.0
+        pen = np.where(finite, cell - typical, 1e6)
+        self.step_penalty = np.maximum(pen, 0.0)
+
+    def layers_dirty(self) -> bool:
+        return self.layers is not None and self.layers.version != self._layers_version
+
+    def refresh_layers(self, force: bool = False) -> bool:
+        """Recombine the layer stack if a weight changed. Returns True if the
+        derived arrays (and hence the cost fields) were rebuilt."""
+        if not force and not self.layers_dirty():
+            return False
+        self._combine_layers()
+        self._rebuild_walkable()
+        self.clear_cost_fields()
+        return True
+
     def _rebuild_walkable(self) -> None:
         self.permablocked[:] = False
         self.openspace[:] = True
@@ -112,6 +225,8 @@ class NavGrid:
             blocked = rasterize_polygons_mask(blockers, self.xs, self.ys)
             self.openspace = ~blocked
         self.walkable = self.openspace & (~self.permablocked)
+        if self.extra_blocked is not None:
+            self.walkable &= ~self.extra_blocked
         self._compute_boundary()
 
     def _compute_boundary(self) -> None:
@@ -161,6 +276,8 @@ class NavGrid:
                         break
                 self.openspace[i, j] = not blocked
         self.walkable = self.openspace & (~self.permablocked)
+        if self.extra_blocked is not None:
+            self.walkable &= ~self.extra_blocked
         self._compute_boundary()
 
     # -------------------------------------------------------------- transforms
@@ -193,10 +310,16 @@ class NavGrid:
                            rng: Optional[np.random.Generator] = None) -> np.ndarray:
         """Compute the cost-to-destination field seeded at ``(ox, oy)``.
 
-        Uses the slope-weighted Dijkstra when a topography is present, otherwise
-        the faithful BFS flood fill (with the original random diagonal bias)."""
+        Three solvers, in order of increasing information:
+
+        * topography present -> slope-weighted Dijkstra (directional up/down cost)
+        * friction only      -> friction-weighted flood fill (adds >1 per cell)
+        * neither            -> the faithful uniform-cost BFS flood fill
+        """
         if self.elevation is not None:
             return self._dijkstra(key, ox, oy)
+        if self.friction is not None:
+            return self._weighted_floodfill(key, ox, oy, rng)
         return self._bfs(key, ox, oy, rng)
 
     def _seed_cell(self, ox: float, oy: float) -> Tuple[int, int]:
@@ -235,12 +358,54 @@ class NavGrid:
         self._cost_fields[key] = cost
         return cost
 
+    def _weighted_floodfill(self, key: int, ox: float, oy: float,
+                            rng: Optional[np.random.Generator]) -> np.ndarray:
+        """Friction-weighted flood fill.
+
+        Keeps the character of the original uniform-cost fill -- including the
+        70/30 orthogonal/all-neighbour random bias, and a flat increment that
+        ignores diagonal length -- but instead of adding 1 per cell it adds the
+        local ``friction``, so crossing a river or thick scrub costs several
+        cells' worth of effort. Because the increments are uneven a plain FIFO
+        queue would no longer settle cells in cost order, so the frontier is a
+        priority queue and cells may be relaxed more than once.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+        nx, ny = self.nx, self.ny
+        fric = self.friction
+        cost = np.full((nx, ny), np.inf, dtype=float)
+        px, py = self._seed_cell(ox, oy)
+        cost[px, py] = 0.0
+        heap: List[Tuple[float, int, int]] = [(0.0, px, py)]
+        while heap:
+            c, i, j = heapq.heappop(heap)
+            if c > cost[i, j]:
+                continue
+            neighbors = _ORTHO if (rng.random() * 100 >= 30) else _NEIGHBORS
+            for di, dj, _ in neighbors:
+                ni, nj = i + di, j + dj
+                if not (0 <= ni < nx and 0 <= nj < ny):
+                    continue
+                if not self.walkable[ni, nj]:
+                    continue
+                inc = 1.0 if fric is None else 0.5 * (fric[i, j] + fric[ni, nj])
+                if not math.isfinite(inc):
+                    continue
+                nc = c + inc
+                if nc < cost[ni, nj]:
+                    cost[ni, nj] = nc
+                    heapq.heappush(heap, (nc, ni, nj))
+        self._cost_fields[key] = cost
+        return cost
+
     def _dijkstra(self, key: int, ox: float, oy: float) -> np.ndarray:
         nx, ny = self.nx, self.ny
         px, py = self._seed_cell(ox, oy)
         cost = np.full((nx, ny), np.inf, dtype=float)
         cost[px, py] = 0.0
         elev = self.elevation
+        fric = self.friction
         gsize = self.gridsize
         tc = self.terrain_cost
         heap: List[Tuple[float, int, int]] = [(0.0, px, py)]
@@ -255,10 +420,18 @@ class NavGrid:
                 if not self.walkable[ni, nj]:
                     continue
                 horiz = planar * gsize
-                dz = elev[i, j] - elev[ni, nj]  # agent walks neighbour -> current
-                step = tc.step_cost(dz, horiz)
+                if elev is not None:
+                    dz = elev[i, j] - elev[ni, nj]  # agent walks neighbour -> current
+                    step = tc.step_cost(dz, horiz)
+                else:
+                    step = horiz
                 if not math.isfinite(step):
                     continue
+                if fric is not None:
+                    # average the two cells so a crossing costs the same either way
+                    step *= 0.5 * (fric[i, j] + fric[ni, nj])
+                    if not math.isfinite(step):
+                        continue
                 nc = c + step
                 if nc < cost[ni, nj]:
                     cost[ni, nj] = nc
