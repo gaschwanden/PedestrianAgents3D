@@ -30,7 +30,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v15";
+  const CACHE = "pedsim-field-v16";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -85,7 +85,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=15");
+  const worker = new Worker("worker.js?v=16");
   const canvas = document.createElement("canvas");
   let map = null;
 
@@ -1873,7 +1873,9 @@
   }
 
   Promise.all([
-    fetch(PACK + "index.json").then(function (r) {
+    // no-cache: always ask the server whether the pack changed (offline, the
+    // service worker answers from its stored copy)
+    fetch(PACK + "index.json", { cache: "no-cache" }).then(function (r) {
       if (!r.ok) throw new Error("index");
       return r.json();
     }),
