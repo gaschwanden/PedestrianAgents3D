@@ -30,7 +30,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v16";
+  const CACHE = "pedsim-field-v17";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -85,7 +85,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=16");
+  const worker = new Worker("worker.js?v=17");
   const canvas = document.createElement("canvas");
   let map = null;
 
@@ -1083,7 +1083,9 @@
         });
         map.addLayer({
           id: "osm-places", type: "symbol", source: "osm",
-          filter: ["==", ["get", "kind"], "place"],
+          // village names only once zoomed in, or they bury the cluster map
+          filter: ["all", ["==", ["get", "kind"], "place"],
+            ["any", ["in", ["get", "place"], ["literal", ["city", "town"]]], [">=", ["zoom"], 11.5]]],
           layout: {
             "text-field": ["get", "name"],
             "text-font": LABEL_FONT,
