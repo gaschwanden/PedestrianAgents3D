@@ -322,9 +322,14 @@ def site_ods(frame: LocalFrame, sites_list: Iterable, group_by_period: bool = Tr
 
     out = []
     for s in sites_list:
-        if not getattr(s, "usable", False):
+        if isinstance(s, tuple):
+            # (site, lat, lon, quality) from sites.placed(): a working position
+            s, lat, lon = s[0], s[1], s[2]
+        elif getattr(s, "usable", False):
+            lat, lon = s.lat, s.lon
+        else:
             continue
-        x, y = frame.to_local(s.lat, s.lon)
+        x, y = frame.to_local(lat, lon)
         group = period_group(s) if group_by_period else 0
         out.append(OD(float(x), float(y), group=group,
                       origin_weight=1.0, dest_weight=1.0, name=s.name,

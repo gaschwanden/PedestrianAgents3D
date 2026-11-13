@@ -475,8 +475,10 @@ it. There is no second agent model and nothing is played back.
 | File | What it is |
 | --- | --- |
 | `packs/goebekli/cluster.json` + `.bin` | the Taş Tepeler cluster: terrain on the 250 m grid, rivers, sites, and the solved routes for all three seasons |
-| `packs/goebekli/village-<site>.json` + `.bin` | one 900 m village per site with a usable coordinate, at 3 m cells, with its solved routes |
-| `packs/goebekli/basemap.jpg` | shaded relief rendered from the Copernicus DEM, the offline basemap |
+| `packs/goebekli/village-<site>.json` + `.bin` | one 600 m village per site (all 17), at 2 m cells, with its solved routes |
+| `packs/goebekli/sat-<scene>.jpg` | Sentinel-2 cloudless 2016 (EOX, CC BY 4.0), 10 m pixels: the offline satellite basemap |
+| `packs/goebekli/osm-<scene>.geojson` | roads, tracks and place names from OpenStreetMap (ODbL), drawn over the basemap |
+| `packs/goebekli/basemap.jpg` | shaded relief rendered from the Copernicus DEM, the fallback basemap |
 | `vendor/pedsim.zip` | this package and `data/config`, for the in-browser engine |
 
 A packed scene replays **bit for bit** like the scene it was packed from
@@ -495,11 +497,39 @@ python -m pedsim pack --save-dir ../out       # include scenes saved in the desk
 python -m pedsim serve                        # http://localhost:8000
 ```
 
+The satellite and road layers are downloaded when the pack is built and cached
+in `data/raw/basemap_cache`; `pedsim pack --no-maps` skips them. Online, the
+page draws detailed Esri imagery over the packed image (*Best available*).
+
+**All 17 sites take part.** Sites without a usable coordinate sit on a working
+position (`sites.position`): Sefertepe on the first of its two conflicting
+values, Mendiktepe, Söğüt Tarlası and Biris Mezarlığı on a point in their
+published search area. They are marked with a "?" and their scene says so. A
+working position is a placeholder, not a location.
+
+**Why a site sends no walkers.** With chronology on, a site outside the time
+window, an undated site (unless *Undated sites* is set to include them) or a
+site with no co-occupied partner sends nobody. The panel lists each such site
+with its reason.
+
+**Slope and rivers.** The scenes use a slope exponent of 7.0 (cluster) and 6.0
+(village) against Tobler's 3.5, and a river crossing cost of 12. These are
+assumptions, set strong so relief and water shape the corridors. *Slope effect*
+and *River crossing cost* scale them live; every route is re-solved.
+
+**Walkers go home.** A walker that arrives starts its next trip from the place
+it first set out from (`Simulation.respawn_at_origin`, on in these scenes). The
+page shows it reappear there with a ring.
+
 In the page: **Cluster** or a site from the list (or tap a site marker).
-**▶ / ❚❚** run and pause. **P / F / Fx / TR / TRx** are the analysis modes of the
+**▶ Run / ❚❚**, **⏩** (×1, ×2, ×5, ×10 steps per frame) and **↺ Reset**
+(restart the run, keep the edits) are in the panel and the toolbar. **P / F / Fx / TR / TRx** are the analysis modes of the
 Java tool. **OD+ / OD− / +/−** add, remove and re-weight places; **B○ / B▭ / B−**
-add and remove buildings (centre/rim or corner/corner, then the door; an
-entrance is placed outside it); **Iso** shows the isovist from a tapped point.
+add and remove buildings: click the centre (or a corner), move to see the
+outline and its size, click again to finish; right-click or Esc cancels. A
+building is hollow: a 0.4 m wall around a room, with a door facing the nearest
+place and the household's place inside. The routing grid resolves the wall as
+one 2 m cell and the doorway as about two; **Iso** shows the isovist from a tapped point.
 Every edit goes to the engine and re-routes the walkers. **save / open** keep a
 scene's edits on the device, **file** exports them as `<scene>.geometry.json`,
 which the desktop viewer and `pedsim pack --save-dir` read. **X** returns the
@@ -524,7 +554,7 @@ tiles need the laptop's tile proxy.
 **What is not in a village scene yet.** Villages are real terrain with six
 perimeter gates and a centre. Walls and buildings come from a georeferenced
 plan (`pedsim.plans`) or are drawn in; none ship. Terrain is the 30 m DEM,
-interpolated to the 3 m grid, so it shows the hill, not the architecture.
+interpolated to the 2 m grid, so it shows the hill, not the architecture.
 
 The desktop Edit tab can box-select buildings (two clicks) and assign them to a
 phase. **B circle** / **B rect** place a round or rectangular house in three

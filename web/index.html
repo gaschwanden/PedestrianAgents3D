@@ -16,12 +16,14 @@
     <div id="hud">
       <div id="toolbar" class="java-grid" aria-label="tools"></div>
       <div id="tool-tip" class="tool-tip" hidden aria-hidden="true"></div>
+      <div id="hint" class="hint-bar" hidden role="status"></div>
       <div id="chrome">
         <div class="brand">
           <strong data-i18n="title">pedsim field</strong>
           <span id="scale-label">Cluster</span>
           <span id="net" data-i18n="online">Online</span>
         </div>
+        <button type="button" id="panel-toggle" aria-controls="panel" aria-expanded="true">☰</button>
         <label class="lang"><span data-i18n="language">Language</span>
           <select id="lang">
             <option value="en">English</option>
@@ -31,6 +33,11 @@
       </div>
       <aside id="panel">
         <p class="hint" id="blurb" data-i18n="packed"></p>
+        <div class="run-row">
+          <button type="button" id="btn-run" data-i18n="btnRun">▶ Run</button>
+          <button type="button" id="btn-speed">⏩ ×2</button>
+          <button type="button" id="btn-reset" data-i18n="btnReset">↺ Reset</button>
+        </div>
         <div class="row">
           <span data-i18n="scale">Scale</span>
           <div class="pair">
@@ -43,18 +50,17 @@
         <label class="row check"><input id="chrono" type="checkbox" checked>
           <span data-i18n="chronology">Chronology</span>
         </label>
-        <label class="row"><span data-i18n="earlier">Earlier (start BC)</span>
-          <div class="slider-line">
-            <input id="start" type="range" min="7000" max="12000" step="50" value="9500">
-            <output id="start-out">9500</output>
+        <div class="row">
+          <span><span data-i18n="window">Time of observation</span>: <output id="window-out"></output></span>
+          <!-- one track, two handles; values are minus the year BC so that
+               older is on the left -->
+          <div class="dual">
+            <div class="dual-track"><div id="dual-fill" class="dual-fill"></div></div>
+            <input id="start" type="range" min="-12000" max="-7000" step="50" value="-9500" aria-label="earlier end">
+            <input id="end" type="range" min="-12000" max="-7000" step="50" value="-8000" aria-label="later end">
           </div>
-        </label>
-        <label class="row"><span data-i18n="later">Later (end BC)</span>
-          <div class="slider-line">
-            <input id="end" type="range" min="7000" max="12000" step="50" value="8000">
-            <output id="end-out">8000</output>
-          </div>
-        </label>
+          <div class="dual-scale"><span>12000 BC</span><span>9500</span><span>7000 BC</span></div>
+        </div>
         <label class="row"><span data-i18n="season">Season</span>
           <select id="season"></select>
         </label>
@@ -64,13 +70,18 @@
         </fieldset>
         <label class="row"><span data-i18n="basemap">Basemap</span>
           <select id="basemap">
-            <option value="relief" selected data-i18n="relief">Relief (offline)</option>
-            <option value="satellite" data-i18n="satellite">Satellite</option>
+            <option value="auto" selected data-i18n="mapAuto">Best available</option>
+            <option value="sat" data-i18n="mapSat">Satellite 10 m (offline)</option>
+            <option value="relief" data-i18n="relief">Relief (offline)</option>
+            <option value="esri" data-i18n="mapEsri">Satellite, detailed (online)</option>
             <option value="google" data-i18n="google">Google satellite</option>
             <option value="google-hybrid" data-i18n="googleHybrid">Google hybrid</option>
             <option value="streets" data-i18n="streets">Streets</option>
             <option value="none" data-i18n="none">None</option>
           </select>
+        </label>
+        <label class="row check"><input id="roads" type="checkbox" checked>
+          <span data-i18n="roads">Roads and place names</span>
         </label>
         <label class="row"><span data-i18n="opacity">Opacity</span>
           <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.7">
@@ -83,6 +94,25 @@
         </label>
         <label class="row"><span data-i18n="tilt">3D tilt</span>
           <input id="tilt" type="range" min="0" max="70" step="1" value="45">
+        </label>
+        <label class="row"><span data-i18n="undated">Undated sites</span>
+          <select id="undated">
+            <option value="exclude" data-i18n="undatedExclude">Leave out</option>
+            <option value="include_flagged" data-i18n="undatedFlag">Include, marked</option>
+            <option value="include" data-i18n="undatedInclude">Include</option>
+          </select>
+        </label>
+        <label class="row"><span data-i18n="terrainWeight">Slope effect</span>
+          <div class="slider-line">
+            <input id="terrain-weight" type="range" min="0" max="3" step="0.25" value="1">
+            <output id="terrain-weight-out">×1</output>
+          </div>
+        </label>
+        <label class="row"><span data-i18n="riverWeight">River crossing cost</span>
+          <div class="slider-line">
+            <input id="river-weight" type="range" min="0" max="4" step="0.25" value="1">
+            <output id="river-weight-out">×1</output>
+          </div>
         </label>
         <label class="row"><span data-i18n="agents">Walkers</span>
           <div class="slider-line">

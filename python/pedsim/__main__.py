@@ -41,6 +41,8 @@ def main(argv=None) -> int:
     pack = sub.add_parser("pack", help="build an offline data pack")
     pack.add_argument("action", nargs="?", default="build")
     pack.add_argument("--area", default="goebekli")
+    pack.add_argument("--no-maps", action="store_true",
+                      help="skip the satellite and road downloads (no network needed)")
     pack.add_argument("--save-dir", default="",
                       help="folder of desktop saves (<site>.geometry.json) to pack")
 
@@ -83,6 +85,7 @@ def main(argv=None) -> int:
     if args.cmd == "pack":
         from .pack import build_pack
         print(build_pack(args.area, publish_web=True, save_dir=args.save_dir,
+                         maps=not args.no_maps,
                          progress=lambda m: print("  " + m, flush=True)))
         return 0
     if args.cmd == "compare":

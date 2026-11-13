@@ -344,8 +344,12 @@ def write_cluster_scene(
 
 # ------------------------------------------------------------------ live pack
 #: Sites left out of the village scenes, with the reason shown in the index.
-VILLAGE_SKIP = {
-    "Nevalı Çori": "submerged under the Atatürk reservoir; the modern DEM shows the lake surface",
+VILLAGE_SKIP: Dict[str, str] = {}
+
+#: Said in a village scene's note, because the terrain there is not the site's.
+VILLAGE_CAVEAT = {
+    "Nevalı Çori": "Submerged under the Atatürk reservoir: the terrain here is "
+                   "the modern lake surface, not the valley the site stood in.",
 }
 
 
@@ -358,14 +362,18 @@ def _site_rows() -> List[dict]:
     from . import maps
     from .sites import located
 
+    from .sites import placed
+
     rows = []
-    for site in located(usable_only=False):
+    for site, lat, lon, quality in placed():
         rows.append({
             "name": site.name,
-            "coordinates": [round(site.lon, 6), round(site.lat, 6)],
+            "coordinates": [round(lon, 6), round(lat, 6)],
             "start_bc": site.start_bc, "end_bc": site.end_bc,
-            "confidence": getattr(site.confidence, "value", str(site.confidence)),
-            "usable": bool(site.usable),
+            "confidence": quality,
+            # a working position, not a location: conflicting or search area
+            "uncertain": quality in ("conflicting", "search area"),
+            "usable": True,
             "official": bool(site.official),
             "period": site.period,
             "has_plan": bool(maps.has_village_plan(site.name)),
@@ -393,6 +401,7 @@ def _write_live(root: str, sim, scene_id: str, name: str, scale: str, frame,
         "file": f"{scene_id}.json", "blob": f"{scene_id}.bin",
         "bytes": len(blob), "note": kw.get("note", ""),
         "center": meta["display"]["center"],
+        "bounds": meta["display"]["bounds"],
     }
 
 
@@ -402,7 +411,7 @@ def _saved_geometry(save_dir: str, name: str) -> str:
 
 
 def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
-                    village_extent: float = 900.0, village_cell: float = 3.0,
+                    village_extent: float = 600.0, village_cell: float = 2.0,
                     cluster_cell: float = 250.0, progress=None) -> dict:
     """Pack the cluster and one village per usable site for the live engine.
 
@@ -411,7 +420,7 @@ def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
     """
     from . import live, scenes
     from .rivers import Season
-    from .sites import located
+    from .sites import placed
 
     say = progress or (lambda _m: None)
     os.makedirs(root, exist_ok=True)
@@ -442,7 +451,7 @@ def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
               else "synthetic relief: no DEM was downloaded when this pack was built"),
     ))
 
-    for site in located(usable_only=True):
+    for site, _lat, _lon, quality in placed():
         if sites_filter and site.name not in sites_filter:
             continue
         if site.name in VILLAGE_SKIP:
@@ -458,9 +467,16 @@ def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
         grid = sim.grid
         bounds = (grid.min_x, grid.min_y, grid.max_x, grid.max_y)
         frame = live.BilinearFrame.from_frame(sim.frame, bounds, nodes=3)
-        conf = getattr(site.confidence, "value", str(site.confidence))
+        conf = quality
         walls = len(sim.buildings) + len(sim.obstacles)
         note = f"coordinate: {conf}. "
+        if conf == "search area":
+            note = ("Position unknown: this scene sits on a placeholder inside the "
+                    "published search area. ")
+        elif conf == "conflicting":
+            note = "Two published positions disagree; this is the first of them. "
+        if site.name in VILLAGE_CAVEAT:
+            note += VILLAGE_CAVEAT[site.name] + " "
         note += (f"{walls} wall or building outlines from the saved desktop scene."
                  if walls else "Terrain and perimeter gates only: no wall plan imported yet.")
         row = _write_live(
@@ -496,7 +512,8 @@ def write_engine_zip(path: str) -> str:
 
 
 def build_pack(area: str = "goebekli", out_dir: str = "", publish_web: bool = False,
-               save_dir: str = "", sites_filter=None, progress=None) -> str:
+               save_dir: str = "", sites_filter=None, progress=None,
+               maps: bool = True) -> str:
     root = out_dir or os.path.join(package_root(), "data", "packs", area)
     os.makedirs(root, exist_ok=True)
     config = config_dir()
@@ -516,13 +533,15 @@ def build_pack(area: str = "goebekli", out_dir: str = "", publish_web: bool = Fa
         # The folder is build output: drop scenes from an earlier build so the
         # index and the files on disk cannot disagree.
         for name in os.listdir(root):
-            if name.endswith((".bin", ".jpg")) or (
+            if name.endswith((".bin", ".jpg", ".geojson")) or (
                     name.endswith(".json") and name != "manifest.json"):
                 os.remove(os.path.join(root, name))
         index = write_live_pack(root, sites_filter=sites_filter, save_dir=save_dir,
                                 progress=progress)
-        from .basemap import write_basemap
+        from .basemap import write_basemap, write_scene_maps
         index["basemap"] = write_basemap(root, progress=progress)
+        if maps:
+            index["maps"] = write_scene_maps(root, index["scenes"], progress=progress)
         with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as fh:
             json.dump(index, fh, indent=1, ensure_ascii=False)
     manifest = {

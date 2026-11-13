@@ -200,3 +200,125 @@ def test_dem_is_interpolated_below_source_resolution(tmp_path):
     assert np.array_equal(coarse.elevation,
                           geo.load_dem([path], frame, bounds, cellsize=60.0,
                                        interpolate=False).elevation)
+
+
+def test_respawn_at_origin_keeps_each_walker_home():
+    sim = make()
+    sim.respawn_at_origin = True
+    homes = {}
+    arrivals = 0
+    for _ in range(600):
+        sim.step()
+        for k, a in enumerate(sim.agents):
+            if not a.active:
+                continue
+            if k in homes and a.age <= 1:
+                arrivals += 1
+            assert homes.setdefault(k, a.home) == a.home == a.origin
+    assert arrivals > 5           # walkers did finish trips and start again
+
+
+def test_default_respawn_draws_a_fresh_origin():
+    sim = make()
+    assert sim.respawn_at_origin is False
+    seen = {}
+    for _ in range(600):
+        sim.step()
+        for k, a in enumerate(sim.agents):
+            if a.active:
+                seen.setdefault(k, set()).add(a.origin)
+    assert any(len(v) > 1 for v in seen.values())
+
+
+def test_terrain_and_river_weights_change_routes_and_return():
+    from pedsim.rivers import River
+
+    sim = make()
+    # a new array, not an in-place edit: the solver caches per elevation array
+    sim.grid.elevation = np.fromfunction(
+        lambda i, j: 0.15 * np.abs(i - sim.grid.nx / 2) * sim.grid.gridsize,
+        sim.grid.elevation.shape)
+    sim.set_terrain_weight(1.0)
+    base = sim.grid.cost_field(4).copy()
+    sim.set_terrain_weight(2.0)
+    assert np.nanmax(sim.grid.cost_field(4)[np.isfinite(base)]) > np.nanmax(base[np.isfinite(base)])
+    sim.set_terrain_weight(1.0)
+    assert np.array_equal(sim.grid.cost_field(4), base)
+
+    sim.add_river([(200.0, 0.0), (200.0, 400.0)], name="test", width=12.0, crossing_cost=4.0)
+    one = sim.grid.cost_field(4).copy()
+    sim.set_river_weight(3.0)
+    assert sim.rivers[0].crossing_cost == 4.0          # the river itself is untouched
+    ok = np.isfinite(one)
+    assert (sim.grid.cost_field(4)[ok] >= one[ok] - 1e-9).all()
+    assert sim.grid.cost_field(4)[ok].max() > one[ok].max()
+    sim.set_river_weight(1.0)
+    assert np.array_equal(sim.grid.cost_field(4), one)
+    assert isinstance(sim.rivers[0], River)
+
+
+def test_packed_routes_are_not_used_at_other_weights():
+    meta, blob = packed()
+    engine = live.LiveEngine()
+    engine.load(meta, blob)
+    grid = engine.sim.grid
+    calls = []
+    solve = grid.compute_cost_field
+    grid.compute_cost_field = lambda *a, **k: (calls.append(a[0]), solve(*a, **k))[1]
+    engine.set_toggles({"terrainWeight": 2.0})
+    assert calls
+    assert engine.describe()["terrain_weight"] == 2.0
+
+
+def test_toggles_do_not_reset_the_analysis():
+    meta, blob = packed()
+    engine = live.LiveEngine()
+    engine.load(meta, blob)
+    engine.step(60)
+    peak = engine.sim.grid.occupancy.max()
+    engine.set_toggles({"analysis": "path", "season": "normal"})
+    assert engine.sim.grid.occupancy.max() == peak
+
+
+def test_hollow_building_has_a_room_a_wall_and_a_door():
+    meta, blob = packed()
+    engine = live.LiveEngine()
+    first = engine.load(meta, blob)
+    sim = engine.sim
+    g = sim.grid
+    # a 40 m square room in open ground, door in the middle of its south wall
+    x0, y0, x1, y1 = 260.0, 40.0, 300.0, 80.0
+    ring = [engine._lonlat(p) for p in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    door = engine._lonlat((280.0, y0))
+    engine.add_building(ring, door=door)
+    b = sim.buildings[-1]
+    assert b.wall_m == 0.4 and b.door is not None
+
+    cell = lambda x, y: (g.cell_x(x), g.cell_y(y))
+    assert g.walkable[cell(280.0, 60.0)]            # the room is open
+    assert not g.walkable[cell(x0, 60.0)]           # west wall
+    assert not g.walkable[cell(x1, 60.0)]           # east wall
+    assert not g.walkable[cell(280.0, y1)]          # north wall
+    assert g.walkable[cell(280.0, y0)]              # the doorway
+    # the household's place is inside, and the outside can reach it
+    od = sim.ods[-1]
+    assert od.kind == "house" and x0 < od.x < x1 and y0 < od.y < y1
+    field = g.cell_x(od.x), g.cell_y(od.y)
+    cost = g.cost_field(len(sim.ods) - 1)
+    assert np.isfinite(cost[cell(20.0, 20.0)])
+    # and only through the door: walling it up cuts the room off
+    b.door = None
+    g._rebuild_walkable()
+    sim._build_cost_fields()
+    assert not np.isfinite(g.cost_field(len(sim.ods) - 1)[cell(20.0, 20.0)])
+
+    desc = engine.describe()
+    drawn = desc["buildings"][-1]
+    assert drawn["inner"] and len(drawn["inner"]) == len(drawn["ring"])
+    saved = json.loads(json.dumps(engine.export_geometry()))
+    assert saved["buildings"][-1]["wall_m"] == 0.4
+    other = live.LiveEngine()
+    other.load(meta, blob)
+    other.apply_geometry(saved)
+    assert other.sim.buildings[-1].wall_m == 0.4
+    assert len(first["buildings"]) + 1 == len(desc["buildings"])

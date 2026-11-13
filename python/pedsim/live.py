@@ -244,6 +244,7 @@ def pack_scene(sim: Simulation, scene_id: str, name: str, scale: str,
             "speed": sim.speed, "cone_vision": sim.cone_vision,
             "radius_divider": sim.radius_divider,
             "blur_occupancy": sim.blur_occupancy, "blur_decay": sim.blur_decay,
+            "respawn_at_origin": bool(sim.respawn_at_origin),
             "trace_percent": sim.trace_percent, "num_groups": sim.num_groups,
             "seed": getattr(sim, "pack_seed", None),
         },
@@ -267,6 +268,7 @@ def build_simulation(meta: dict, blob=None, use_packed_costs: bool = True,
     geo = meta["geometry"]
     params = dict(meta["params"])
     seed = params.pop("seed", None)
+    respawn = bool(params.pop("respawn_at_origin", False))
     if num_agents is not None:
         params["num_agents"] = int(num_agents)
     arrays = meta.get("arrays", {})
@@ -290,6 +292,8 @@ def build_simulation(meta: dict, blob=None, use_packed_costs: bool = True,
     def provider(sim: Simulation):
         if not state["pristine"]:
             return None
+        if sim.terrain_weight != 1.0 or sim.river_weight != 1.0:
+            return None            # packed routes are for the scene as built
         # Until the research settings are attached the simulation cannot name
         # its own state; it is being built in the packed default state.
         key = cost_key(sim) if state["ready"] else state["default"]
@@ -308,6 +312,10 @@ def build_simulation(meta: dict, blob=None, use_packed_costs: bool = True,
         )
         for b in geo.get("buildings", [])
     ]
+    for built, b in zip(buildings, geo.get("buildings", [])):
+        built.wall_m = b.get("wall_m")
+        built.door = tuple(b["door"]) if b.get("door") else None
+        built.door_width_m = float(b.get("door_width_m", 1.2))
     obstacles = [
         Building.from_polygon(
             [tuple(p) for p in o["polygon"]], kind="obstacle",
@@ -330,6 +338,7 @@ def build_simulation(meta: dict, blob=None, use_packed_costs: bool = True,
         seed=seed, cost_field_provider=provider, **params,
     )
     sim.pack_seed = seed
+    sim.respawn_at_origin = respawn
     sim._packed_research = (phases, geo, meta.get("research", {}))
     return sim, state
 
@@ -354,6 +363,24 @@ def _apply_research(sim: Simulation) -> None:
         r.window = Interval(int(window[0]), int(window[1]))
     r.tau = int(research.get("tau", 0))
     r.undated_policy = research.get("undated_policy", r.undated_policy)
+
+
+def _nearest_on_ring(pts, point) -> Tuple[float, float]:
+    """Closest point to ``point`` on the closed polygon ``pts``."""
+    best, best_d = point, float("inf")
+    n = len(pts)
+    for i in range(n):
+        x0, y0 = pts[i]
+        x1, y1 = pts[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        length2 = dx * dx + dy * dy
+        t = 0.0 if length2 <= 0 else min(1.0, max(
+            0.0, ((point[0] - x0) * dx + (point[1] - y0) * dy) / length2))
+        q = (x0 + t * dx, y0 + t * dy)
+        d = math.hypot(point[0] - q[0], point[1] - q[1])
+        if d < best_d:
+            best, best_d = q, d
+    return best
 
 
 # --------------------------------------------------------------------- engine
@@ -441,6 +468,8 @@ class LiveEngine:
                 "phase_ids": list(b.phase_ids),
                 "active": bool(r.phase_allows(b.phase_ids)),
                 "ring": self._ring(b.footprint.as_xy()),
+                "inner": self._inner_ring(b),
+                "door": self._lonlat(b.door) if b.door else None,
             })
         obstacles = [
             {"index": k, "layer": o.layer, "phase_ids": list(getattr(o, "phase_ids", [])),
@@ -461,6 +490,7 @@ class LiveEngine:
             item = dict(s)
             item["active"] = bool(r.site_is_active(s["name"]))
             item["flagged"] = bool(r.site_is_flagged(s["name"]))
+            item["walking"], item["reason"] = self._site_state(s)
             sites.append(item)
         corners = self.frame.corners_lonlat()
         lons = [c[0] for c in corners]
@@ -494,7 +524,53 @@ class LiveEngine:
             "population": sim.population_label(),
             "hud": r.hud_lines(sim.population_label()),
             "edited": not self._costs.get("pristine", True),
+            "terrain_weight": sim.terrain_weight,
+            "river_weight": sim.river_weight,
+            "undated": r.undated_policy,
+            "tau": r.tau,
         }
+
+    def _site_state(self, site: dict) -> Tuple[bool, str]:
+        """Does this site send walkers now, and if not, why not."""
+        sim = self.sim
+        r = sim.research
+        od = next((o for o in sim.ods if o is not None
+                   and (o.site or o.name) == site["name"]), None)
+        if not site.get("usable", True) or od is None:
+            return False, "no usable coordinate"
+        if not r.site_is_active(site["name"]):
+            if site.get("start_bc") is None or site.get("end_bc") is None:
+                return False, "undated, and undated sites are excluded"
+            return False, (f"occupied {site['start_bc']}–{site['end_bc']} BC, "
+                           "outside the time window")
+        if r.origin_weight(od) <= 0:
+            return False, "switched off"
+        partners = any(o is not None and o is not od and r.dest_weight(od, o) > 0
+                       for o in sim.ods)
+        if not partners:
+            return False, "no other site is occupied at the same time in this window"
+        return True, ""
+
+    def _lonlat(self, point) -> List[float]:
+        lon, lat = self.frame.to_lonlat(point[0], point[1])
+        return [float(lon), float(lat)]
+
+    def _inner_ring(self, b) -> Optional[List[List[float]]]:
+        """Inside face of a hollow building's wall, for drawing it at its true
+        thickness. ``None`` for a solid footprint."""
+        if b.wall_m is None:
+            return None
+        pts = b.footprint.as_xy()
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        # the apothem: distance from the centre to the nearest wall line
+        from .rivers import distance_field
+        closed = [(p[0], p[1]) for p in pts] + [(pts[0][0], pts[0][1])]
+        apothem = float(distance_field(np.array([cx]), np.array([cy]), closed)[0, 0])
+        if apothem <= b.wall_m:
+            return None
+        k = 1.0 - b.wall_m / apothem
+        return self._ring([(cx + (p[0] - cx) * k, cy + (p[1] - cy) * k) for p in pts])
 
     def _ring(self, pts) -> List[List[float]]:
         xs = [p[0] for p in pts]
@@ -524,10 +600,12 @@ class LiveEngine:
             groups = np.fromiter((a.group for a in act), dtype="<u1", count=len(act))
             slot = {id(a): k for k, a in enumerate(sim.agents)}
             ids = np.fromiter((slot[id(a)] for a in act), dtype="<u2", count=len(act))
+            ages = np.fromiter((min(a.age, 65535) for a in act), dtype="<u2", count=len(act))
         else:
             agents = np.zeros((0, 2), dtype="<f8")
             groups = np.zeros((0,), dtype="<u1")
             ids = np.zeros((0,), dtype="<u2")
+            ages = np.zeros((0,), dtype="<u2")
 
         channels = 1
         if self.analysis == "facade":
@@ -549,6 +627,8 @@ class LiveEngine:
             "groups": groups.tobytes(),
             # slot of each walker, so a client can tween the same one between frames
             "ids": ids.tobytes(),
+            # ticks since each walker set out: a small age means it just respawned
+            "ages": ages.tobytes(),
             "channels": channels,
             "nx": int(image.shape[2]), "ny": int(image.shape[1]),
             "field": image.astype("<f4").tobytes(),
@@ -639,7 +719,20 @@ class LiveEngine:
                 r.month = info.number
                 r.daylight_minutes = info.daylight_minutes
                 r.task_weights = dict(info.task_weights)
-        if "analysis" in toggles and toggles["analysis"] in ANALYSIS_BY_NAME:
+        if "terrainWeight" in toggles:
+            w = float(toggles["terrainWeight"])
+            if abs(w - sim.terrain_weight) > 1e-9:
+                sim.set_terrain_weight(w)
+        if "riverWeight" in toggles:
+            w = float(toggles["riverWeight"])
+            if abs(w - sim.river_weight) > 1e-9:
+                if sim.rivers:
+                    sim.set_river_weight(w)
+                else:
+                    sim.river_weight = w
+        if ("analysis" in toggles and toggles["analysis"] in ANALYSIS_BY_NAME
+                and toggles["analysis"] != self.analysis):
+            # switching mode clears the analysis fields, so only on a real change
             self.analysis = toggles["analysis"]
             sim.set_analysis_mode(ANALYSIS_BY_NAME[self.analysis])
         if "agents" in toggles:
@@ -699,6 +792,8 @@ class LiveEngine:
         if k < 0:
             return -1
         for a in self.sim.agents:
+            if a.home == k:
+                a.home = -1
             if a.active and (a.target == k or a.origin == k):
                 a.active = False
         self.sim.delete_od(k)
@@ -726,18 +821,47 @@ class LiveEngine:
 
     def add_building(self, ring: Sequence[Sequence[float]], door=None,
                      function: str = "domestic", height: float = 3.0,
-                     phase_ids: Optional[Sequence[str]] = None) -> int:
-        """Add a footprint (lon/lat ring). ``door`` adds an entrance OD outside it."""
+                     phase_ids: Optional[Sequence[str]] = None,
+                     wall_m: Optional[float] = 0.4) -> int:
+        """Add a building from a lon/lat ring.
+
+        By default it is hollow: a ``wall_m`` thick wall around a room, open at
+        ``door`` (a lon/lat point on the wall). The household's place goes in
+        the room, or just outside the door when the room is too small to hold a
+        cell. ``wall_m=None`` gives a solid footprint with its place outside.
+        """
+        sim = self.sim
         pts = [self._local(p[0], p[1]) for p in ring]
         if len(pts) > 1 and pts[0] == pts[-1]:
             pts = pts[:-1]
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        gate = self._local(door[0], door[1]) if door is not None else None
+        if gate is not None:
+            # put the opening on the wall line itself, wherever the tap landed
+            gate = _nearest_on_ring(pts, gate)
         self._routing_edited()
-        self.sim.add_building(pts, height=height, function=function, phase_ids=phase_ids)
-        if door is not None:
-            self.add_od(door[0], door[1], weight=1.0, kind="house",
-                        name=f"entrance {len(self.sim.buildings)}", phase_ids=phase_ids)
+        sim.add_building(pts, height=height, function=function, phase_ids=phase_ids,
+                         wall_m=wall_m, door=gate if wall_m is not None else None)
+        name = f"house {len(sim.buildings)}"
+        grid = sim.grid
+        inside = grid.is_walkable(grid.cell_x(cx), grid.cell_y(cy)) and wall_m is not None
+        if inside:
+            spot = (cx, cy)
+        elif gate is not None:
+            # step out from the wall, away from the centre
+            dx, dy = gate[0] - cx, gate[1] - cy
+            norm = math.hypot(dx, dy) or 1.0
+            out = 2.0 * grid.gridsize
+            spot = (gate[0] + dx / norm * out, gate[1] + dy / norm * out)
+        else:
+            spot = None
+        if spot is not None:
+            k = sim.add_od(spot[0], spot[1], origin_weight=1.0, dest_weight=1.0,
+                           kind="house", name=name, phase_ids=phase_ids)
+            self._od_edited(k)
         self._touch()
-        return len(self.sim.buildings) - 1
+        return len(sim.buildings) - 1
 
     def delete_building(self, lon: float, lat: float) -> int:
         from .geometry import point_in_polygon
@@ -759,6 +883,20 @@ class LiveEngine:
 
     def reset_analysis(self) -> None:
         self.sim.reset_analysis()
+
+    def restart(self) -> None:
+        """Start the run again: clear the heat, traces and walkers, keep every
+        edit. The walkers set out afresh from newly drawn places."""
+        sim = self.sim
+        sim.reset_analysis()
+        for a in sim.agents:
+            a.active = False
+            a.home = -1
+        sim.traces.clear()
+        sim.category_occupancy.clear()
+        sim.ticks = 0
+        self._isovist = None
+        self._touch()
 
     # ------------------------------------------------------------ save / load
     def export_geometry(self) -> dict:
@@ -795,6 +933,8 @@ class LiveEngine:
             self.reset()
         elif name == "resetAnalysis":
             self.reset_analysis()
+        elif name == "restart":
+            self.restart()
         elif name == "addOd":
             self.add_od(p["lon"], p["lat"], p.get("weight", 1.0),
                         p.get("kind", "destination"), p.get("name", ""))
@@ -804,7 +944,8 @@ class LiveEngine:
             self.weight_od(p["lon"], p["lat"])
         elif name == "addBuilding":
             self.add_building(p["ring"], p.get("door"), p.get("function", "domestic"),
-                              float(p.get("height", 3.0)), p.get("phase_ids"))
+                              float(p.get("height", 3.0)), p.get("phase_ids"),
+                              p.get("wall_m", 0.4))
         elif name == "deleteBuilding":
             self.delete_building(p["lon"], p["lat"])
         elif name == "isovist":

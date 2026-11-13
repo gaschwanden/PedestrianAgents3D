@@ -17,6 +17,8 @@
     { id: "bdDelete", label: "B-", tip: "tipBdDelete", group: "mode" },
     { id: "run", label: "▶", tip: "tipRun", group: "action" },
     { id: "pause", label: "❚❚", tip: "tipPause", group: "action" },
+    { id: "speed", label: "⏩", tip: "tipSpeed", group: "action" },
+    { id: "restart", label: "↺", tip: "tipRestart", group: "action" },
     { id: "record", label: "REC", tip: "tipRecord", group: "toggle" },
     { id: "gpx", label: "GPX", tip: "tipGpx", group: "action" },
     { id: "hub", label: "HUB", tip: "tipHub", group: "action" },
@@ -28,7 +30,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v14";
+  const CACHE = "pedsim-field-v15";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -74,6 +76,9 @@
     hadTraces: false,
     low: false,
     autosave: true,
+    pulses: [],           // walkers that just set out again: [lon, lat, group, t0]
+    lastSteps: 1,
+    draft: null,          // building being drawn: {shape, a, b, dragging}
     proxy: false,         // true when pedsim serve is behind this page (tiles, hub)
     mapReady: false,
   };
@@ -109,12 +114,14 @@
     Array.prototype.forEach.call(select.options, function (option) {
       // Relief is in the pack; every other basemap is fetched tile by tile
       // through the laptop's tile proxy, which a static host does not have.
-      option.disabled = !(online && state.proxy) && option.value !== "none" && option.value !== "relief";
+      const kind = option.value;
+      if (kind === "auto" || kind === "relief" || kind === "none") option.disabled = false;
+      else if (kind === "sat") option.disabled = !satelliteFor(state.sceneId);
+      else if (kind === "esri") option.disabled = !online;      // direct, any host
+      else option.disabled = !(online && state.proxy);          // through the laptop
     });
-    if (!(online && state.proxy) && select.value !== "none" && select.value !== "relief") {
-      select.value = "relief";
-      setBasemap("relief");
-    }
+    if (select.selectedOptions[0] && select.selectedOptions[0].disabled) select.value = "auto";
+    setBasemap(select.value);
   }
 
   function db() {
@@ -239,7 +246,30 @@
     }
   }
 
+  const HINTS = {
+    bdCircle: "hintCircle", bdRect: "hintRect", bdDelete: "hintDelete",
+    odAdd: "hintOdAdd", odDelete: "hintOdDelete", odWeight: "hintOdWeight",
+  };
+
+  function showHint(text) {
+    const bar = document.getElementById("hint");
+    let line = text || "";
+    if (!line) {
+      if (state.recording) line = t("hintRecord");
+      else if (state.mode && HINTS[state.mode]) line = t(HINTS[state.mode]);
+      else if (state.showIso) line = t("hintIso");
+    }
+    bar.textContent = line;
+    bar.hidden = !line;
+  }
+
   function paintToolbar() {
+    showHint();
+    const run = document.getElementById("btn-run");
+    if (run) {
+      run.textContent = state.playing ? t("btnPause") : t("btnRun");
+      run.classList.toggle("active", state.playing);
+    }
     document.querySelectorAll(".java-btn").forEach(function (button) {
       const id = button.dataset.id;
       let on = false;
@@ -255,15 +285,21 @@
   }
 
   function chronologyWindow() {
-    let startBc = Number(document.getElementById("start").value);
-    let endBc = Number(document.getElementById("end").value);
-    if (startBc < endBc) {
-      const swap = startBc;
-      startBc = endBc;
-      endBc = swap;
-    }
-    document.getElementById("start-out").textContent = String(startBc);
-    document.getElementById("end-out").textContent = String(endBc);
+    // The two handles hold minus the year BC, so older is on the left. Either
+    // handle may be dragged past the other: the window is whatever lies between.
+    const first = document.getElementById("start");
+    const second = document.getElementById("end");
+    const a = -Number(first.value);
+    const b = -Number(second.value);
+    const startBc = Math.max(a, b);
+    const endBc = Math.min(a, b);
+    const lo = -Number(first.min);
+    const hi = -Number(first.max);
+    const fill = document.getElementById("dual-fill");
+    fill.style.left = (100 * (lo - startBc) / (lo - hi)) + "%";
+    fill.style.right = (100 * (endBc - hi) / (lo - hi)) + "%";
+    document.getElementById("window-out").textContent =
+      startBc + "–" + endBc + " BC (" + (startBc - endBc) + " yrs)";
     return { startBc: startBc, endBc: endBc };
   }
 
@@ -282,6 +318,9 @@
       overrides: state.overrides,
       analysis: state.analysis,
       agents: Number(document.getElementById("agents").value),
+      undated: document.getElementById("undated").value,
+      terrainWeight: Number(document.getElementById("terrain-weight").value),
+      riverWeight: Number(document.getElementById("river-weight").value),
     };
   }
 
@@ -387,7 +426,8 @@
     const out = new Map();
     const n = frame.n_agents || 0;
     for (let i = 0; i < n; i++) {
-      out.set(frame.ids[i], [frame.agents[2 * i], frame.agents[2 * i + 1], frame.groups[i]]);
+      out.set(frame.ids[i],
+        [frame.agents[2 * i], frame.agents[2 * i + 1], frame.groups[i], frame.ages[i]]);
     }
     return out;
   }
@@ -399,8 +439,10 @@
     const amount = Math.min(1, Math.max(0, (now - state.lerpStart) / span));
     const out = [];
     to.forEach(function (b, id) {
-      // a walker that was just released has no previous position: no tween
-      const a = from.get(id) || b;
+      // A walker that has just set out again is at its origin now. Its last
+      // position was the destination it reached, so tweening would drag it
+      // across the map: it appears at the origin instead.
+      const a = (b[3] <= state.lastSteps + 1 ? null : from.get(id)) || b;
       out.push([a[0] + (b[0] - a[0]) * amount, a[1] + (b[1] - a[1]) * amount, b[2]]);
     });
     syncAgents(out);
@@ -421,9 +463,34 @@
         return;
       }
       lerpAgents(now);
+      drawPulses(now);
       state.displayTimer = requestAnimationFrame(tick);
     };
     state.displayTimer = requestAnimationFrame(tick);
+  }
+
+  // A ring that opens and fades where a walker sets out again, so arrivals
+  // turning into departures can be seen rather than inferred.
+  const PULSE_MS = 900;
+
+  function notePulses(now) {
+    state.agentTo.forEach(function (b) {
+      if (b[3] <= state.lastSteps + 1) state.pulses.push([b[0], b[1], b[2], now]);
+    });
+    if (state.pulses.length > 400) state.pulses.splice(0, state.pulses.length - 400);
+  }
+
+  function drawPulses(now) {
+    if (!state.pulses.length && !state.hadPulses) return;
+    state.pulses = state.pulses.filter(function (p) { return now - p[3] < PULSE_MS; });
+    state.hadPulses = state.pulses.length > 0;
+    setData("spawns", state.pulses.map(function (p) {
+      const age = (now - p[3]) / PULSE_MS;
+      return featurePoint([p[0], p[1]], { r: 3 + 13 * age, o: 0.9 * (1 - age), group: p[2] });
+    }));
+    if (state.hadPulses && !state.playing) {
+      requestAnimationFrame(function (next) { drawPulses(next); });
+    }
   }
 
   function metresPerDegree(lat) {
@@ -515,9 +582,16 @@
           name: building.name,
           height: building.height || 3,
         },
-        geometry: { type: "Polygon", coordinates: [building.ring] },
+        // a hollow building is drawn as its wall: outline with the room cut out
+        geometry: {
+          type: "Polygon",
+          coordinates: building.inner ? [building.ring, building.inner] : [building.ring],
+        },
       };
     }));
+    setData("doors", (desc.buildings || []).filter(function (building) {
+      return building.active && building.door;
+    }).map(function (building) { return featurePoint(building.door, {}); }));
     setData("obstacles", (desc.obstacles || []).map(function (item) {
       return {
         type: "Feature", properties: { layer: item.layer },
@@ -541,10 +615,11 @@
       return featurePoint(site.coordinates, {
         name: site.name,
         official: site.official ? 1 : 0,
-        active: site.active ? 1 : 0,
-        usable: site.usable === false ? 0 : 1,
+        active: site.walking ? 1 : 0,
+        flagged: site.flagged ? 1 : 0,
+        usable: site.uncertain ? 0 : 1,
         village: villageFor(site.name) ? 1 : 0,
-        label: site.name + (site.usable === false ? " ?" : ""),
+        label: site.name + (site.uncertain ? " ?" : ""),
       });
     }));
   }
@@ -617,6 +692,11 @@
     if (desc.note) lines.push(desc.note);
     (desc.hud || []).forEach(function (line) { lines.push(line); });
     lines.push("season: " + frame.season + (frame.daylight ? " · " + frame.daylight + " min daylight" : ""));
+    const idle = (desc.sites || []).filter(function (site) { return !site.walking; });
+    if (desc.scale === "cluster" && idle.length) {
+      lines.push(t("idleSites") + " (" + idle.length + "):");
+      idle.forEach(function (site) { lines.push("  " + site.name + " — " + site.reason); });
+    }
     lines.push("places: " + (desc.ods || []).length + " · buildings: " + (desc.buildings || []).length
       + (desc.edited ? " · edited" : ""));
     if (frame.live) {
@@ -697,9 +777,14 @@
     paint();
     state.agentFrom = state.agentTo;
     state.agentTo = agentsFromFrame(message);
+    state.lastSteps = message.steps || 1;
+    if (message.steps) notePulses(now);
     state.lerpStart = now;
     state.lerpMs = Math.max(state.playStepMs, message.ms || 0);
-    if (!state.playing) lerpAgents(now + state.lerpMs);
+    if (!state.playing) {
+      lerpAgents(now + state.lerpMs);
+      drawPulses(now);
+    }
     if (message.traces || state.hadTraces) syncTraces(message);
     state.hadTraces = Boolean(message.traces);
     syncIso(message.isovist);
@@ -730,49 +815,86 @@
       tiles: [tileUrl("google-hybrid")],
       attribution: "© Google",
     },
+    // Esri sends cross-origin headers, so this one needs no laptop behind the
+    // page. Its terms allow display with credit, not storing: the service
+    // worker leaves other origins alone.
+    esri: {
+      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
+      maxzoom: 19,
+    },
   };
 
   function firstOverlay() {
+    // Basemap layers go under everything pedsim draws, roads included.
+    if (map.getLayer("osm-roads")) return "osm-roads";
     return map.getLayer("density") ? "density" : undefined;
+  }
+
+  function satelliteFor(id) {
+    const maps = state.index && state.index.maps;
+    return (maps && maps.satellite && maps.satellite[id]) || null;
+  }
+
+  function addImage(id, entry) {
+    map.addSource(id, {
+      type: "image",
+      url: PACK + entry.file + "?v=" + state.index.build,
+      coordinates: entry.corners,
+    });
+    map.addLayer({
+      id: id, type: "raster", source: id,
+      paint: { "raster-opacity": 1, "raster-fade-duration": 0 },
+    }, firstOverlay());
   }
 
   function setBasemap(kind) {
     // Not isStyleLoaded(): that is false while any source is still loading,
     // which would silently drop the basemap chosen during start-up.
     if (!map || !state.styleReady) return;
-    ["basemap", "relief"].forEach(function (id) {
+    ["basemap", "relief", "sat", "satwide"].forEach(function (id) {
       if (map.getLayer(id)) map.removeLayer(id);
       if (map.getSource(id)) map.removeSource(id);
     });
+    if (kind === "none") return;
+    const online = navigator.onLine;
     const relief = state.index && state.index.basemap;
-    if (kind === "relief") {
-      if (!relief || !relief.file) return;
-      map.addSource("relief", {
-        type: "image",
-        url: PACK + relief.file + "?v=" + state.index.build,
-        coordinates: relief.corners,
-      });
-      map.addLayer({
-        id: "relief", type: "raster", source: "relief",
-        paint: { "raster-opacity": 1, "raster-fade-duration": 0 },
-      }, firstOverlay());
-      return;
+    const near = satelliteFor(state.sceneId);
+    const wide = satelliteFor("cluster");
+    let use = kind;
+    if (use === "auto") use = online ? "esri" : (near || wide ? "sat" : "relief");
+    // The packed image goes down first. Online tiles are drawn over it, so a
+    // tile that does not arrive in the field leaves the packed map showing.
+    if (use === "relief" || !(near || wide)) {
+      if (relief && relief.file) addImage("relief", relief);
+    } else {
+      if (wide && wide !== near) addImage("satwide", wide);
+      if (near) addImage("sat", near);
     }
-    if (!TILES[kind] || !navigator.onLine) return;
+    if (!TILES[use] || !online) return;
     map.addSource("basemap", {
       type: "raster",
-      tiles: TILES[kind].tiles,
+      tiles: TILES[use].tiles,
       tileSize: 256,
-      attribution: TILES[kind].attribution,
-      maxzoom: 20,
+      attribution: TILES[use].attribution,
+      maxzoom: TILES[use].maxzoom || 20,
     });
-    // Keep imagery under the density / site overlays.
     map.addLayer({
       id: "basemap",
       type: "raster",
       source: "basemap",
       paint: { "raster-opacity": 1, "raster-fade-duration": 0 },
     }, firstOverlay());
+  }
+
+  function syncOsm() {
+    if (!map || !state.mapReady || !state.index) return;
+    const maps = state.index.maps || {};
+    const entry = (maps.osm || {})[state.sceneId] || (maps.osm || {}).cluster;
+    const show = document.getElementById("roads").checked && entry;
+    map.getSource("osm").setData(show
+      ? PACK + entry.file + "?v=" + state.index.build
+      : { type: "FeatureCollection", features: [] });
   }
 
   const LABEL_FONT = ["Noto Sans Regular"];
@@ -812,6 +934,21 @@
       try {
         const empty = { type: "FeatureCollection", features: [] };
         state.styleReady = true;
+        map.addSource("osm", { type: "geojson", data: empty });
+        map.addLayer({
+          id: "osm-roads", type: "line", source: "osm",
+          filter: ["==", ["get", "kind"], "road"],
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: {
+            "line-color": "#ffffff",
+            "line-opacity": ["match", ["get", "rank"], 1, 0.75, 2, 0.6, 3, 0.45, 0.35],
+            "line-width": [
+              "interpolate", ["linear"], ["zoom"],
+              9, ["match", ["get", "rank"], 1, 1.4, 2, 0.8, 0.4],
+              15, ["match", ["get", "rank"], 1, 4, 2, 3, 3, 2, 1.2],
+            ],
+          },
+        });
         map.addSource("density", {
           type: "canvas",
           canvas: canvas,
@@ -826,7 +963,6 @@
             "raster-fade-duration": 0,
           },
         });
-        setBasemap(document.getElementById("basemap").value);
         map.addSource("rivers", { type: "geojson", data: empty });
         map.addLayer({
           id: "rivers", type: "line", source: "rivers",
@@ -858,6 +994,14 @@
             "fill-extrusion-vertical-gradient": true,
           },
         });
+        map.addSource("doors", { type: "geojson", data: empty });
+        map.addLayer({
+          id: "doors", type: "circle", source: "doors",
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 5],
+            "circle-color": "#00ff66", "circle-stroke-width": 1, "circle-stroke-color": "#003311",
+          },
+        });
         map.addSource("sites", { type: "geojson", data: empty });
         map.addLayer({
           id: "sites", type: "circle", source: "sites",
@@ -869,15 +1013,18 @@
               17, ["case", ["==", ["get", "official"], 1], 9, 7],
             ],
             // Sites outside the time window stay on the map, greyed out.
+            // an uncertain position (conflicting or search area) is drawn
+            // hollow-looking: dark fill, and a "?" after its name
             "circle-color": [
               "case",
-              ["==", ["get", "usable"], 0], "#777777",
               ["==", ["get", "active"], 0], "#5a5a5a",
+              ["==", ["get", "usable"], 0], "#7a3b00",
               ["==", ["get", "official"], 1], "#ff2222",
               "#ffaa00",
             ],
             "circle-stroke-width": ["case", ["==", ["get", "village"], 1], 2, 1],
-            "circle-stroke-color": "#ffffff",
+            // an undated site that is included anyway wears a yellow ring
+            "circle-stroke-color": ["case", ["==", ["get", "flagged"], 1], "#ffe14d", "#ffffff"],
             "circle-opacity": ["case", ["==", ["get", "active"], 0], 0.6, 1],
           },
         });
@@ -932,6 +1079,46 @@
           },
           paint: { "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1 },
         });
+        map.addLayer({
+          id: "osm-places", type: "symbol", source: "osm",
+          filter: ["==", ["get", "kind"], "place"],
+          layout: {
+            "text-field": ["get", "name"],
+            "text-font": LABEL_FONT,
+            "text-size": ["match", ["get", "place"], "city", 14, "town", 12, 10],
+            "text-optional": true,
+          },
+          paint: { "text-color": "#ffe9a8", "text-halo-color": "#000000", "text-halo-width": 1.2 },
+        }, "sites");
+        map.addSource("spawns", { type: "geojson", data: empty });
+        map.addLayer({
+          id: "spawns", type: "circle", source: "spawns",
+          paint: {
+            "circle-radius": ["get", "r"],
+            "circle-color": "rgba(0,0,0,0)",
+            "circle-stroke-width": 2,
+            "circle-stroke-color": [
+              "match", ["get", "group"], 0, GROUP_COLOURS[0], 1, GROUP_COLOURS[1], 2, GROUP_COLOURS[2], "#ffffff",
+            ],
+            "circle-stroke-opacity": ["get", "o"],
+          },
+        });
+        map.addSource("draft", { type: "geojson", data: empty });
+        map.addLayer({
+          id: "draft-fill", type: "fill", source: "draft",
+          filter: ["==", ["geometry-type"], "Polygon"],
+          paint: { "fill-color": "#ffcc00", "fill-opacity": 0.35 },
+        });
+        map.addLayer({
+          id: "draft-line", type: "line", source: "draft",
+          filter: ["==", ["geometry-type"], "Polygon"],
+          paint: { "line-color": "#ffcc00", "line-width": 2.5 },
+        });
+        map.addLayer({
+          id: "draft-point", type: "circle", source: "draft",
+          filter: ["==", ["geometry-type"], "Point"],
+          paint: { "circle-radius": 5, "circle-color": "#ffcc00", "circle-stroke-width": 1.5, "circle-stroke-color": "#000000" },
+        });
         map.addSource("agents", { type: "geojson", data: empty });
         map.addLayer({
           id: "agents", type: "circle", source: "agents",
@@ -944,6 +1131,10 @@
               15, 2.2,
               17, 2.8,
             ],
+            // sized on the screen, not on the ground: in the tilted view every
+            // walker is the same size, near or far
+            "circle-pitch-scale": "viewport",
+            "circle-pitch-alignment": "viewport",
             "circle-color": "#ffffff",
             "circle-stroke-width": 0.8,
             "circle-stroke-color": [
@@ -968,7 +1159,17 @@
           paint: { "fill-color": "#ffffff", "fill-opacity": 0.22, "fill-outline-color": "#ffffff" },
         });
         map.on("click", onMapClick);
+        ["mousedown", "touchstart"].forEach(function (name) { map.on(name, draftDown); });
+        ["mousemove", "touchmove"].forEach(function (name) { map.on(name, draftMove); });
+        ["mouseup", "touchend"].forEach(function (name) { map.on(name, draftUp); });
+        map.on("contextmenu", function (event) {
+          if (!state.draft) return;
+          event.preventDefault();
+          cancelDraft();
+        });
         state.mapReady = true;
+        setBasemap(document.getElementById("basemap").value);
+        syncOsm();
         applySceneToMap();
         updateMapInteraction();
       } catch (error) {
@@ -1028,6 +1229,13 @@
       });
     });
     phases.parentNode.hidden = !(desc.phases || []).length;
+    document.getElementById("undated").value = desc.undated || "exclude";
+    ["terrain", "river"].forEach(function (key) {
+      const value = desc[key + "_weight"] == null ? 1 : desc[key + "_weight"];
+      document.getElementById(key + "-weight").value = String(value);
+      document.getElementById(key + "-weight-out").textContent = "×" + value;
+    });
+    document.getElementById("river-weight").disabled = !(desc.rivers || []).length;
     document.getElementById("agents").value = String(desc.num_agents);
     document.getElementById("agents-out").textContent = String(desc.num_agents);
     document.getElementById("scale-cluster").classList.toggle("active", desc.scale === "cluster");
@@ -1053,10 +1261,13 @@
     }
     pause();
     state.sceneId = id;
+    state.draft = null;
+    state.pulses = [];
+    setNet();              // the packed satellite image is per scene
+    syncOsm();
     state.agentFrom = new Map();
     state.agentTo = new Map();
     state.stepMs = 0;
-    state.template = null;
     state.playStepMs = row.scale === "village" ? 200 : 300;
     setStatus(t("sceneLoading") + " " + row.label);
     ensureMap();
@@ -1204,31 +1415,138 @@
     worker.postMessage({ type: "command", name: name, payload: payload });
   }
 
-  function finishTemplate(doorLngLat) {
-    const draft = state.template;
-    if (!draft || !draft.a || !draft.b) return;
-    let ring;
+  // ------------------------------------------------------ drawing a building
+  // Press, drag, release: the outline follows the finger. A plain tap also
+  // works (tap the start, tap the end). The entrance is placed by the page, on
+  // the wall facing the nearest place, so there is no third step to remember.
+  function drawingBuilding() {
+    return state.mode === "bdCircle" || state.mode === "bdRect";
+  }
+
+  function draftRing(draft) {
+    if (!draft || !draft.a || !draft.b) return null;
     if (draft.shape === "circle") {
       const radius = distMetres(draft.a, draft.b);
-      if (radius < 1) {
-        setStatus(t("bdTooSmall"));
-        state.template = null;
-        return;
-      }
-      ring = circleRing(draft.a, radius, 24);
-    } else {
-      if (Math.abs(draft.a[0] - draft.b[0]) < 1e-7 || Math.abs(draft.a[1] - draft.b[1]) < 1e-7) {
-        setStatus(t("bdTooSmall"));
-        state.template = null;
-        return;
-      }
-      ring = rectRing(draft.a, draft.b);
+      return radius > 0 ? circleRing(draft.a, radius, 24) : null;
     }
-    const door = entranceFromDoor(ring, [doorLngLat.lng, doorLngLat.lat]);
+    if (draft.a[0] === draft.b[0] || draft.a[1] === draft.b[1]) return null;
+    return rectRing(draft.a, draft.b);
+  }
+
+  function draftSize(draft) {
+    if (draft.shape === "circle") return "Ø " + (2 * distMetres(draft.a, draft.b)).toFixed(1) + " m";
+    const w = distMetres(draft.a, [draft.b[0], draft.a[1]]);
+    const h = distMetres(draft.a, [draft.a[0], draft.b[1]]);
+    return w.toFixed(1) + " × " + h.toFixed(1) + " m";
+  }
+
+  function drawDraft() {
+    const draft = state.draft;
+    if (!draft) {
+      setData("draft", []);
+      return;
+    }
+    const ring = draftRing(draft);
+    const features = [featurePoint(draft.a, {})];
+    if (ring) features.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [ring] } });
+    setData("draft", features);
+    showHint((ring ? draftSize(draft) + " — " : "") + t("hintSecond") + " · " + t("hintRight"));
+  }
+
+  function cancelDraft() {
+    state.draft = null;
+    setData("draft", []);
+    showHint();
+  }
+
+  function nearestPlace(point) {
+    let best = null;
+    let bestD = Infinity;
+    ((state.desc && state.desc.ods) || []).forEach(function (od) {
+      const d = distMetres(point, od.coordinates);
+      if (od.active && d < bestD) {
+        bestD = d;
+        best = od;
+      }
+    });
+    return best;
+  }
+
+  function finishDraft() {
+    const draft = state.draft;
+    const ring = draftRing(draft);
+    const cell = (state.desc && state.desc.grid.gridsize) || 2;
+    const small = !ring || (draft.shape === "circle"
+      ? distMetres(draft.a, draft.b) < cell
+      : Math.min(distMetres(draft.a, [draft.b[0], draft.a[1]]),
+        distMetres(draft.a, [draft.a[0], draft.b[1]])) < cell);
+    if (small) {
+      cancelDraft();
+      setStatus(t("bdTooSmall"));
+      return;
+    }
+    const box = state.desc.bounds;
+    const outside = ring.some(function (p) {
+      return p[0] < box.west || p[0] > box.east || p[1] < box.south || p[1] > box.north;
+    });
+    if (outside) {
+      cancelDraft();
+      setStatus(t("bdOutside"));
+      return;
+    }
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < ring.length - 1; i++) { cx += ring[i][0]; cy += ring[i][1]; }
+    const centre = [cx / (ring.length - 1), cy / (ring.length - 1)];
+    const toward = nearestPlace(centre);
+    const door = entranceFromDoor(ring, toward ? toward.coordinates : [centre[0], centre[1] - 1e-4]);
     edit("addBuilding", { ring: ring, door: door, function: "domestic", height: 3 });
-    state.template = { shape: draft.shape };
-    setStatus(t("bdAdded"));
-    paintToolbar();
+    cancelDraft();
+    setStatus(t("bdEntrance") + " " + (toward ? toward.name : "south"));
+  }
+
+  function draftDown(event) {
+    if (!drawingBuilding() || state.recording) return;
+    if (event.originalEvent && event.originalEvent.button) return;   // left button only
+    if (event.originalEvent && event.originalEvent.touches && event.originalEvent.touches.length > 1) {
+      cancelDraft();          // two fingers: the user is zooming, not drawing
+      return;
+    }
+    event.preventDefault();
+    const here = [event.lngLat.lng, event.lngLat.lat];
+    if (state.draft && state.draft.waiting) {
+      state.draft.b = here;
+      finishDraft();
+      return;
+    }
+    state.draft = {
+      shape: state.mode === "bdCircle" ? "circle" : "rect",
+      a: here, b: here, down: event.point, dragging: true, waiting: false,
+    };
+    drawDraft();
+  }
+
+  function draftMove(event) {
+    const draft = state.draft;
+    if (!draft || !drawingBuilding()) return;
+    if (!draft.dragging && !draft.waiting) return;
+    draft.b = [event.lngLat.lng, event.lngLat.lat];
+    drawDraft();
+  }
+
+  function draftUp(event) {
+    const draft = state.draft;
+    if (!draft || !draft.dragging) return;
+    draft.dragging = false;
+    const moved = Math.hypot(event.point.x - draft.down.x, event.point.y - draft.down.y);
+    if (moved > 8) {
+      draft.b = [event.lngLat.lng, event.lngLat.lat];
+      finishDraft();
+    } else {
+      // a tap, not a drag: the next tap sets the far side
+      draft.waiting = true;
+      drawDraft();
+    }
   }
 
   function siteAt(point) {
@@ -1245,21 +1563,7 @@
       addTrackPoint(lngLat.lat, lngLat.lng, "map");
       return;
     }
-    if (state.mode === "bdCircle" || state.mode === "bdRect") {
-      const shape = state.mode === "bdCircle" ? "circle" : "rect";
-      if (!state.template || state.template.shape !== shape || state.template.done) {
-        state.template = { shape: shape, a: [lngLat.lng, lngLat.lat] };
-        setStatus(shape === "circle" ? t("bdCircleRim") : t("bdRectCorner"));
-        return;
-      }
-      if (!state.template.b) {
-        state.template.b = [lngLat.lng, lngLat.lat];
-        setStatus(t("bdDoor"));
-        return;
-      }
-      finishTemplate(lngLat);
-      return;
-    }
+    if (drawingBuilding()) return;      // drawn with press-drag-release
     if (state.mode === "bdDelete") {
       edit("deleteBuilding", where);
       return;
@@ -1300,13 +1604,9 @@
     if (id === "odAdd" || id === "odDelete" || id === "odWeight"
         || id === "bdCircle" || id === "bdRect" || id === "bdDelete") {
       state.mode = state.mode === id ? null : id;
-      state.template = null;
+      cancelDraft();
       paintToolbar();
       updateMapInteraction();
-      if (state.mode === "odAdd") setStatus(t("odMode"));
-      if (state.mode === "bdCircle") setStatus(t("bdCircleStart"));
-      if (state.mode === "bdRect") setStatus(t("bdRectStart"));
-      if (state.mode === "bdDelete") setStatus(t("tipBdDelete"));
       return;
     }
     if (id === "odSave") {
@@ -1327,6 +1627,18 @@
         edit("applyGeometry", { geometry: saved.geometry });
         setStatus(t("opened") + " " + saved.saved.slice(0, 16).replace("T", " "));
       });
+      return;
+    }
+    if (id === "speed") {
+      const steps = [1, 2, 5, 10];
+      const next = steps[(steps.indexOf(state.stepsPerTick) + 1) % steps.length];
+      setSpeed(next);
+      return;
+    }
+    if (id === "restart") {
+      state.pulses = [];
+      edit("restart", {});
+      setStatus(t("restarted"));
       return;
     }
     if (id === "run") { play(); return; }
@@ -1381,8 +1693,7 @@
       // X: back to the scene as packed. Edits saved with "save" stay stored.
       pause();
       if (state.recording) stopRecord();
-      state.template = null;
-      state.mode = null;
+        state.mode = null;
       state.showIso = false;
       syncIso(null);
       db().then(function (base) {
@@ -1403,6 +1714,12 @@
     index.scenes.forEach(function (row) {
       files.push(row.file + "?v=" + index.build);
       files.push(row.blob + "?v=" + index.build);
+    });
+    ["satellite", "osm"].forEach(function (kind) {
+      const entries = (index.maps && index.maps[kind]) || {};
+      Object.keys(entries).forEach(function (id) {
+        files.push(entries[id].file + "?v=" + index.build);
+      });
     });
     return files.map(function (name) { return PACK + name; });
   }
@@ -1487,9 +1804,39 @@
     document.getElementById("agents-out").textContent = event.target.value;
   });
   document.getElementById("agents").addEventListener("change", sendToggles);
+  document.getElementById("undated").addEventListener("change", sendToggles);
+  ["terrain-weight", "river-weight"].forEach(function (id) {
+    document.getElementById(id).addEventListener("input", function (event) {
+      document.getElementById(id + "-out").textContent = "×" + event.target.value;
+    });
+    // every route is solved again, so only when the slider is let go
+    document.getElementById(id).addEventListener("change", function () {
+      setStatus(t("working"));
+      sendToggles();
+    });
+  });
+  document.getElementById("roads").addEventListener("change", syncOsm);
+  function setSpeed(steps) {
+    state.stepsPerTick = steps;
+    document.getElementById("speed").value = String(steps);
+    document.getElementById("speed-out").textContent = "×" + steps;
+    document.getElementById("btn-speed").textContent = "⏩ ×" + steps;
+  }
   document.getElementById("speed").addEventListener("input", function (event) {
-    state.stepsPerTick = Number(event.target.value);
-    document.getElementById("speed-out").textContent = "×" + event.target.value;
+    setSpeed(Number(event.target.value));
+  });
+  document.getElementById("panel-toggle").addEventListener("click", function (event) {
+    const folded = document.getElementById("panel").classList.toggle("folded");
+    event.currentTarget.setAttribute("aria-expanded", String(!folded));
+    event.currentTarget.classList.toggle("active", !folded);
+  });
+  document.getElementById("btn-run").addEventListener("click", function () {
+    if (state.playing) pause(); else play();
+  });
+  document.getElementById("btn-speed").addEventListener("click", function () { onTool("speed"); });
+  document.getElementById("btn-reset").addEventListener("click", function () { onTool("restart"); });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && state.draft) cancelDraft();
   });
   document.getElementById("low").addEventListener("change", function (event) {
     state.low = event.target.checked;

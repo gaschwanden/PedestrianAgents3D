@@ -480,7 +480,7 @@ Travel cost from the stock Tobler solver is in equivalent flat metres when `Terr
 
 ## 17. Implementation status (v1.1)
 
-Package version 0.4.0. Tests live in `python/tests/test_research.py`, `python/tests/test_outputs.py` and `python/tests/test_live.py`. The protocol text is `docs/ODD.md`, regenerated with `python -m pedsim.scenario --odd`.
+Package version 0.5.0. Tests live in `python/tests/test_research.py`, `python/tests/test_outputs.py` and `python/tests/test_live.py`. The protocol text is `docs/ODD.md`, regenerated with `python -m pedsim.scenario --odd`.
 
 | Area | What ships |
 |---|---|
@@ -493,6 +493,8 @@ Package version 0.4.0. Tests live in `python/tests/test_research.py`, `python/te
 The field client has one agent model: the Python one. A packed scene replays bit for bit like its source scene, and the batched vision scan (`pedsim.vision`) and list-based Dijkstra give the same arrays as the per-agent reference; `tests/test_live.py` holds those equalities. Measured in a desktop browser: cluster 400 walkers about 35 steps/s, village 250 walkers about 40 steps/s. D20-04 is not measured on a phone yet.
 
 Decisions added on 2026-11-12: the field version simulates live on the laptop, an iPhone and an iPad; site scale keeps the trip-chain model; the two scales are independent models that share data and tools; every site with a usable coordinate gets a village scene and plans are added as they are supplied.
+
+Added on 2026-11-13 (v0.5): all 17 sites are placed, the four without a usable coordinate on marked working positions; slope and river costs are stronger by default and scalable live (`set_terrain_weight`, `set_river_weight`); walkers restart from their origin (`respawn_at_origin`); buildings can be hollow (`wall_m`, `door`); the pack carries Sentinel-2 cloudless imagery and OpenStreetMap roads; village scenes are 600 m at 2 m cells.
 
 These items are specified and only partly built:
 

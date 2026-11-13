@@ -31,6 +31,12 @@ class Building:
         self.function: str = "unknown"   # domestic / special / storage / unknown
         self.inhabitants: Optional[float] = None
         self.state: str = "standing"     # standing / under_construction / backfilled
+        # A hollow building is a wall around a room: ``wall_m`` is the wall's
+        # thickness (None = the footprint is solid, as in the Java original),
+        # ``door`` a point on the wall where it is open.
+        self.wall_m: Optional[float] = None
+        self.door: Optional[Tuple[float, float]] = None
+        self.door_width_m: float = 1.2
 
     @classmethod
     def from_polygon(cls, poly, kind: str = "building", layer: str = "",
@@ -55,6 +61,9 @@ class Building:
         b.function = self.function
         b.inhabitants = self.inhabitants
         b.state = self.state
+        b.wall_m = self.wall_m
+        b.door = self.door
+        b.door_width_m = self.door_width_m
         return b
 
     def copy_phase_onto(self, other: "Building") -> None:

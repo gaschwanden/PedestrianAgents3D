@@ -70,22 +70,24 @@ function sendFrame(snapshot, ms, steps) {
   const agents = new Float64Array(frame.agents.slice().buffer);
   const groups = frame.groups.slice();
   const ids = new Uint16Array(frame.ids.slice().buffer);
+  const ages = new Uint16Array(frame.ages.slice().buffer);
   const field = new Float32Array(frame.field.slice().buffer);
   frame.agents = agents;
   frame.groups = groups;
   frame.ids = ids;
+  frame.ages = ages;
   frame.field = field;
   frame.ms = ms;
   frame.steps = steps || 0;
   frame.live = true;
-  self.postMessage(frame, [agents.buffer, groups.buffer, ids.buffer, field.buffer]);
+  self.postMessage(frame, [agents.buffer, groups.buffer, ids.buffer, ages.buffer, field.buffer]);
 }
 
 function fallbackFrame() {
   if (!meta) return;
   self.postMessage({
     type: "frame", live: false, scene: meta.id, step: 0, n_agents: 0,
-    agents: new Float64Array(0), groups: new Uint8Array(0), ids: new Uint16Array(0),
+    agents: new Float64Array(0), groups: new Uint8Array(0), ids: new Uint16Array(0), ages: new Uint16Array(0),
     field: new Float32Array(1), nx: 1, ny: 1, channels: 1, max: 0,
     analysis: "path", season: (meta.display && meta.display.season) || "normal",
     describe: meta.display, reason: bootError,

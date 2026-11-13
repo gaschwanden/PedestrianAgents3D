@@ -33,6 +33,15 @@ DATA_DIR = os.environ.get(
 )
 
 DEM_GLOB = "Copernicus_DSM_*.tif"
+
+#: How strongly slope and water steer the routes. All three are ASSUMPTIONS
+#: (modelling choices, not measurements): Tobler's own exponent is 3.5, and the
+#: scenes used 4.5 / 3.5 / 5.0 until v0.5. They are deliberately strong so the
+#: relief and the river crossings shape the corridors; the field page and
+#: ``Simulation.set_terrain_weight`` / ``set_river_weight`` scale them live.
+CLUSTER_SLOPE_FACTOR = 7.0
+VILLAGE_SLOPE_FACTOR = 6.0
+CLUSTER_CROSSING_COST = 12.0
 RIVERS_SHP = os.path.join("HydroRIVERS_v10_eu_shp", "HydroRIVERS_v10_eu.shp")
 
 
@@ -49,8 +58,12 @@ def cluster_scene(data_dir: str = DATA_DIR, cellsize: float = 250.0,
                   pad_m: float = 6000.0, paleo_correct: bool = True,
                   max_rivers: int = 20, num_agents: int = 400,
                   seed: Optional[int] = 7,
-                  progress=None) -> Simulation:
+                  progress=None, include_uncertain: bool = True) -> Simulation:
     """The settlement-cluster simulation.
+
+    ``include_uncertain`` (default) also places the sites without a usable
+    coordinate, on working positions from :func:`pedsim.sites.position`: the
+    first of two conflicting values, or a point in the published search area.
 
     Parameters
     ----------
@@ -73,8 +86,10 @@ def cluster_scene(data_dir: str = DATA_DIR, cellsize: float = 250.0,
     representation of the obstacle.
     """
     say = progress or (lambda _m: None)
-    catalogue = sites.located(usable_only=True)
-    bbox = sites.bounds(usable_only=True)
+    catalogue = sites.placed(include_uncertain)
+    lats = [p[1] for p in catalogue]
+    lons = [p[2] for p in catalogue]
+    bbox = (min(lats), min(lons), max(lats), max(lons))
     frame = geo.LocalFrame.centred_on(bbox)
     b = frame.bounds_for(bbox)
     bounds = (b[0] - pad_m, b[1] - pad_m, b[2] + pad_m, b[3] + pad_m)
@@ -97,7 +112,7 @@ def cluster_scene(data_dir: str = DATA_DIR, cellsize: float = 250.0,
                 shp, frame, bbox, max_rivers=max_rivers,
                 min_length_m=5000.0, clip=bounds,
                 width=chan, bank_width=2.0 * chan,
-                crossing_cost=5.0, attraction=0.35)
+                crossing_cost=CLUSTER_CROSSING_COST, attraction=0.35)
     else:
         say("no downloaded DEM found - using synthetic relief")
         topo = _synthetic_relief(bounds, cellsize)
@@ -109,12 +124,15 @@ def cluster_scene(data_dir: str = DATA_DIR, cellsize: float = 250.0,
         bounds=bounds, ods=ods, gridsize=cellsize,
         topography=topo,
         # a long-distance traveller contours more than a villager: steep ground
-        # is worth a real detour when the journey is tens of kilometres
-        terrain_cost=TerrainCost(slope_factor=4.5, impassable_slope=0.9),
+        # is worth a real detour when the journey is tens of kilometres.
+        # ASSUMPTION: 7.0 is twice Tobler's 3.5, chosen so relief visibly
+        # steers the corridors; calibrate it against walked tracks (B10).
+        terrain_cost=TerrainCost(slope_factor=CLUSTER_SLOPE_FACTOR, impassable_slope=0.9),
         rivers=rivers, season=Season.NORMAL,
         num_agents=num_agents, release_rate=8, speed=1.2,
         cone_vision=60, num_groups=3, seed=seed,
     )
+    sim.respawn_at_origin = True
     sim.frame = frame            # keep the georeference with the scene
     sim.scene_scale = Scale.CLUSTER
     return sim
@@ -145,7 +163,7 @@ def _synthetic_relief(bounds, cellsize: float) -> Topography:
 
 # --------------------------------------------------------------------- village
 def village_scene(site_name: str, data_dir: str = DATA_DIR,
-                  extent_m: float = 1200.0, cellsize: float = 2.0,
+                  extent_m: float = 600.0, cellsize: float = 2.0,
                   num_agents: int = 250, seed: Optional[int] = 3,
                   progress=None) -> Simulation:
     """A single settlement at village scale.
@@ -158,10 +176,11 @@ def village_scene(site_name: str, data_dir: str = DATA_DIR,
     """
     say = progress or (lambda _m: None)
     site = sites.find(site_name)
-    if not site.usable:
-        raise ValueError(f"{site.name} has no usable coordinate "
-                         f"({site.confidence.value}) -- cannot build a village scene")
-    frame = geo.LocalFrame(site.lat, site.lon)
+    where = sites.position(site)
+    if where is None:
+        raise ValueError(f"{site.name} has neither a coordinate nor a search area "
+                         "-- cannot build a village scene")
+    frame = geo.LocalFrame(where[0], where[1])
     half = extent_m / 2.0
     bounds = (-half, -half, half, half)
 
@@ -189,12 +208,14 @@ def village_scene(site_name: str, data_dir: str = DATA_DIR,
 
     sim = Simulation(
         bounds=bounds, ods=ods, gridsize=cellsize, topography=topo,
-        terrain_cost=TerrainCost(slope_factor=3.5),
+        terrain_cost=TerrainCost(slope_factor=VILLAGE_SLOPE_FACTOR),
         num_agents=num_agents, release_rate=15, speed=0.5,
         num_groups=3, seed=seed,
     )
+    sim.respawn_at_origin = True
     sim.frame = frame
     sim.scene_scale = Scale.SITE
+    sim.position_quality = where[2]
     say(f"{site.name}: {sim.grid.nx}x{sim.grid.ny} cells at {cellsize:g} m")
     return sim
 
@@ -211,8 +232,7 @@ def build_app(data_dir: str = DATA_DIR, save_dir: str = ".",
     does not support.
     """
     if detail_sites is None:
-        detail_sites = [s.name for s in sites.located(usable_only=True)
-                        if s.confidence.value == "published"]
+        detail_sites = [s.name for s, _lat, _lon, _q in sites.placed()]
 
     cluster = Scene(
         name="Taş Tepeler cluster", scale=Scale.CLUSTER,

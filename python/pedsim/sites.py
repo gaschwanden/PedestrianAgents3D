@@ -86,6 +86,10 @@ class Site:
     aliases: Tuple[str, ...] = ()
     official: bool = False
     alt_coord: Optional[Tuple[float, float]] = None
+    #: A point inside the area the descriptions pin an unlocated site to. It is
+    #: a placeholder so the site can take part in a run, never a location:
+    #: ``lat``/``lon`` stay ``None`` and every client marks the site as unsure.
+    search_coord: Optional[Tuple[float, float]] = None
     sources: Tuple[str, ...] = ()
     note: str = ""
     phase_ids: Tuple[str, ...] = ()
@@ -228,6 +232,7 @@ SITES: List[Site] = [
     Site(
         name="Mendiktepe", aliases=("Mendik Tepe",),
         lat=None, lon=None, confidence=Confidence.UNKNOWN,
+        search_coord=(37.0400, 38.6200),      # centre of the box in the note
         period="PPNA, possibly terminal Epipalaeolithic", start_bc=10000, end_bc=9000,
         area_ha=4.0, official=True,
         setting="Upper part of a ~200 m ridge between a higher southern and a lower "
@@ -239,8 +244,11 @@ SITES: List[Site] = [
              "Area >=4 ha is very extensive for a PPNA site.",
     ),
     Site(
-        name="Söğüt Tarlası", aliases=("Biris Mezarlığı", "Küçük Gölbaşı", "U 51/1-2"),
+        name="Söğüt Tarlası", aliases=("Sögüt Tarlasi", "Küçük Gölbaşı", "U 51/1-2"),
         lat=None, lon=None, confidence=Confidence.UNKNOWN,
+        # Biris village plus a nominal step north ("just north of Biris
+        # Mezarlığı"). The step only keeps the two sites in separate cells.
+        search_coord=(37.3120, 38.5500),
         period="Epipalaeolithic + PPNB", elevation_m=580.0, official=True,
         setting="Low flat rise ~2 km SW of Bozova, just north of Biris Mezarlığı, "
                 "which sits on a rocky slope by a spring on the west edge of a "
@@ -249,6 +257,19 @@ SITES: List[Site] = [
         note="No coordinate in TAY, tastepeler.org or KE. Bozova is at "
              "37.3620, 38.5254 and Biris village at 37.3095, 38.5500. "
              "Biris mound 120 x 25 m; Söğüt Tarlası extent unpublished.",
+    ),
+    Site(
+        name="Biris Mezarlığı", aliases=("Biris Mezarligi", "Biris"),
+        lat=None, lon=None, confidence=Confidence.UNKNOWN,
+        search_coord=(37.3095, 38.5500),      # Biris village, not the site
+        period="Epipalaeolithic + PPN", official=False,
+        setting="Rocky slope by a spring on the west edge of a modern irrigation "
+                "reservoir, ~2 km SW of Bozova; mound 120 x 25 m",
+        sources=("TAY", "Di Nocera (tastepeler.org)"),
+        note="Recorded together with Söğüt Tarlası, which lies just north of it. "
+             "No coordinate published anywhere found; Biris village is at "
+             "37.3095, 38.5500. Listed separately because the two are distinct "
+             "find-spots.",
     ),
     # --- related PPN sites, not on the official twelve ---------------------
     Site(
@@ -335,6 +356,37 @@ def find(name: str) -> Site:
 def located(usable_only: bool = False) -> List[Site]:
     """Sites with a coordinate. ``usable_only`` also drops the conflicting ones."""
     return [s for s in SITES if (s.usable if usable_only else s.located)]
+
+
+def position(site: Site, include_uncertain: bool = True
+             ) -> Optional[Tuple[float, float, str]]:
+    """Where to put a site in a run: ``(lat, lon, quality)`` or ``None``.
+
+    ``quality`` is ``published`` / ``approximate`` for a usable coordinate.
+    With ``include_uncertain`` a conflicting site is placed on its first
+    published value (``conflicting``) and an unlocated one on its
+    ``search_coord`` (``search area``), so every site can take part. Those two
+    kinds are working positions, and clients must show them as such.
+    """
+    if site.usable:
+        return site.lat, site.lon, site.confidence.value
+    if not include_uncertain:
+        return None
+    if site.located:
+        return site.lat, site.lon, Confidence.CONFLICTING.value
+    if site.search_coord is not None:
+        return site.search_coord[0], site.search_coord[1], "search area"
+    return None
+
+
+def placed(include_uncertain: bool = True) -> List[Tuple[Site, float, float, str]]:
+    """Every site that :func:`position` can place, with that position."""
+    out = []
+    for s in SITES:
+        p = position(s, include_uncertain)
+        if p is not None:
+            out.append((s, p[0], p[1], p[2]))
+    return out
 
 
 def bounds(usable_only: bool = False) -> Tuple[float, float, float, float]:

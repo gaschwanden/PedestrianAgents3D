@@ -37,6 +37,9 @@ class Agent:
     def __init__(self, sim: "Simulation"):
         self.sim = sim
         self.active = False
+        #: OD this walker first set out from; trips restart there when the
+        #: simulation has ``respawn_at_origin`` on. ``die`` leaves it alone.
+        self.home = -1
         self.origin = -1
         self.target = -1
         self.px = 0.0
@@ -76,12 +79,20 @@ class Agent:
             self.task = plan.task_id
             self.load_kg = plan.load_kg
         else:
-            assigned = sim.draw_trip()
+            assigned = None
+            if getattr(sim, "respawn_at_origin", False) and self.home >= 0:
+                # back where this walker set out from, off to a new destination
+                d = sim.draw_destination(self.home)
+                if d is not None:
+                    assigned = (self.home, d)
+            if assigned is None:
+                assigned = sim.draw_trip()
             if assigned is None:
                 return False
             o, d = assigned
         grid = sim.grid
         self.origin = o
+        self.home = o
         self.target = d
         self.group = sim.ods[o].group
         self._apply_class_speed()

@@ -220,14 +220,52 @@ class NavGrid:
         if self.site_polygon is not None:
             inside = rasterize_polygons_mask([self.site_polygon], self.xs, self.ys)
             self.permablocked = ~inside
-        blockers = [_poly_of(b) for b in (list(self.buildings) + list(self.obstacles))]
+        everything = list(self.buildings) + list(self.obstacles)
+        blockers = [_poly_of(b) for b in everything if getattr(b, "wall_m", None) is None]
         if blockers:
             blocked = rasterize_polygons_mask(blockers, self.xs, self.ys)
             self.openspace = ~blocked
+        for b in everything:
+            if getattr(b, "wall_m", None) is not None:
+                self._block_wall(b)
         self.walkable = self.openspace & (~self.permablocked)
         if self.extra_blocked is not None:
             self.walkable &= ~self.extra_blocked
         self._compute_boundary()
+
+    def _block_wall(self, b) -> None:
+        """Block the wall of a hollow building, leaving its room and door open.
+
+        A wall thinner than a cell cannot be rasterised by cell centres: most of
+        it would fall between them and walkers would step through. So the wall
+        takes every cell within three quarters of a cell of its line, which is
+        the thinnest band that also stops a diagonal step. In the routing the
+        wall is therefore about one cell thick whatever ``wall_m`` says; the
+        drawn wall keeps its true thickness.
+        """
+        from .rivers import distance_field
+
+        ring = [(p[0], p[1]) for p in b.footprint.as_xy()]
+        if len(ring) < 3:
+            return
+        ring.append(ring[0])
+        gs = self.gridsize
+        reach = max(float(b.wall_m) / 2.0, 0.75 * gs)
+        xs_, ys_ = [p[0] for p in ring], [p[1] for p in ring]
+        i0 = max(self.cell_x(min(xs_) - reach) - 1, 0)
+        i1 = min(self.cell_x(max(xs_) + reach) + 1, self.nx - 1)
+        j0 = max(self.cell_y(min(ys_) - reach) - 1, 0)
+        j1 = min(self.cell_y(max(ys_) + reach) + 1, self.ny - 1)
+        if i1 < i0 or j1 < j0:
+            return
+        xs = self.xs[i0:i1 + 1]
+        ys = self.ys[j0:j1 + 1]
+        wall = distance_field(xs, ys, ring) <= reach
+        if b.door is not None:
+            # the opening is at least two cells wide so a walker can find it
+            half = max(float(b.door_width_m) / 2.0, 1.1 * gs)
+            wall &= distance_field(xs, ys, [tuple(b.door)]) > half
+        self.openspace[i0:i1 + 1, j0:j1 + 1] &= ~wall
 
     def _compute_boundary(self) -> None:
         self.boundary[:] = False
@@ -260,6 +298,10 @@ class NavGrid:
         max_px = min(max(self.cell_x(rect[2]), 0), self.nx - 1)
         max_py = min(max(self.cell_y(rect[3]), 0), self.ny - 1)
         blockers = list(self.buildings) + list(self.obstacles)
+        if any(getattr(b, "wall_m", None) is not None for b in blockers):
+            # walls are rasterised as bands, not by cell centre: redo the grid
+            self._rebuild_walkable()
+            return
         for i in range(min_px, max_px + 1):
             x = self.xs[i]
             for j in range(min_py, max_py + 1):

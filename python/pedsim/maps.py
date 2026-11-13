@@ -332,6 +332,14 @@ SOGUT: List[PlanSource] = [
         importability=Importability.NO,
         note="Still a gap in both location and architecture.",
     ),
+    PlanSource(
+        site="Biris Mezarlığı",
+        title="No verified plan or coordinate",
+        kind=PlanKind.ARCHITECTURE,
+        citation="Surveyed with Söğüt Tarlası; mound 120 x 25 m (TAY).",
+        importability=Importability.NO,
+        note="Still a gap in both location and architecture.",
+    ),
 ]
 
 TASLI: List[PlanSource] = [

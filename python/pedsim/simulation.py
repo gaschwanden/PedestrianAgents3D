@@ -83,6 +83,16 @@ class Simulation:
         #: scene can start on a phone without running Dijkstra. Any OD it leaves
         #: out is solved as usual.
         self.cost_field_provider = cost_field_provider
+        #: A walker that arrives starts its next trip from the place it set out
+        #: from, instead of a freshly drawn origin: people go out and come home.
+        #: The share of walkers per origin still follows the origin weights,
+        #: because that is how each walker's first origin was drawn. Off by
+        #: default, as in the Java original; the Taş Tepeler scenes turn it on.
+        self.respawn_at_origin = False
+        #: Multipliers on the slope term and on river crossing cost, for asking
+        #: "what if relief or water mattered more". 1.0 is the scene as built.
+        self.terrain_weight = 1.0
+        self.river_weight = 1.0
         self.ods: List[Optional[OD]] = list(ods)
         self.buildings: List[Building] = [_to_building(b, "building") for b in (buildings or [])]
         self.obstacles: List[Building] = [_to_building(o, "obstacle", 0.0) for o in (obstacles or [])]
@@ -440,8 +450,58 @@ class Simulation:
             return None
         return origins[oo][0], dests[dd]
 
+    def draw_destination(self, origin: int) -> Optional[int]:
+        """Draw a destination for a trip that starts at OD ``origin``.
+
+        ``None`` if that place may no longer send anybody (deleted, phase off,
+        outside the time window) or has nowhere to send them.
+        """
+        if not (0 <= origin < len(self.ods)):
+            return None
+        origin_od = self.ods[origin]
+        if origin_od is None or self.research.origin_weight(origin_od) <= 0:
+            return None
+        dests = []
+        dw = []
+        for k, od in self._active_ods():
+            if od is origin_od:
+                continue
+            weight = self.research.dest_weight(origin_od, od)
+            if weight > 0:
+                dests.append(k)
+                dw.append(weight)
+        if not dests:
+            return None
+        dd = weighted_draw(dw, self.rng)
+        return None if dd == -1 else dests[dd]
+
     def weighted_index(self, weights: Sequence[float]) -> int:
         return weighted_draw(weights, self.rng)
+
+    # ------------------------------------------------- terrain / river weight
+    def set_terrain_weight(self, weight: float) -> None:
+        """Scale how strongly slope slows walking, then re-route.
+
+        The weight multiplies Tobler's ``slope_factor``: 2.0 makes a given
+        gradient cost what twice the exponent would. Both the cost fields and
+        the sight-line penalty follow.
+        """
+        from dataclasses import replace
+
+        weight = min(max(float(weight), 0.0), 10.0)
+        base = getattr(self, "_base_slope_factor", None)
+        if base is None:
+            base = self.grid.terrain_cost.slope_factor
+            self._base_slope_factor = base
+        self.terrain_weight = weight
+        self.grid.terrain_cost = replace(self.grid.terrain_cost, slope_factor=base * weight)
+        self.grid._compute_step_penalty()
+        self._build_cost_fields()
+
+    def set_river_weight(self, weight: float) -> None:
+        """Scale every river's crossing cost, then re-route."""
+        self.river_weight = min(max(float(weight), 0.0), 20.0)
+        self.rebuild_river_layers()
 
     # ------------------------------------------------------------- agent pool
     def release_agents(self) -> int:
@@ -466,7 +526,22 @@ class Simulation:
     #: bit (see :mod:`pedsim.vision`).
     batch_vision = True
 
+    def _check_homes(self) -> None:
+        """Forget every walker's home when the set of places that may send
+        walkers changes (time window, phases, an added or re-weighted place).
+        Otherwise a site that has just become active would never get anybody,
+        because all walkers already belong somewhere else."""
+        r = self.research
+        sig = tuple(0.0 if od is None else r.origin_weight(od) for od in self.ods)
+        if sig != getattr(self, "_home_signature", None):
+            if getattr(self, "_home_signature", None) is not None:
+                for a in self.agents:
+                    a.home = -1
+            self._home_signature = sig
+
     def step(self) -> None:
+        if self.respawn_at_origin:
+            self._check_homes()
         if self.batch_vision:
             from .vision import scan_all
             scan_all(self)
@@ -560,7 +635,11 @@ class Simulation:
                      layer: str = "", function: str = "unknown",
                      phase_ids: Optional[Sequence[str]] = None,
                      inhabitants: Optional[float] = None,
-                     state: str = "standing") -> Building:
+                     state: str = "standing", wall_m: Optional[float] = None,
+                     door: Optional[Tuple[float, float]] = None,
+                     door_width_m: float = 1.2) -> Building:
+        """Add a building. With ``wall_m`` it is hollow: a wall of that
+        thickness around an open room, with an opening at ``door``."""
         from .building import STANDARD_BUILDING_HEIGHT
         if height is None:
             height = STANDARD_BUILDING_HEIGHT
@@ -569,6 +648,9 @@ class Simulation:
             function=function, phase_ids=phase_ids,
             inhabitants=inhabitants, state=state,
         )
+        b.wall_m = wall_m
+        b.door = tuple(door) if door is not None else None
+        b.door_width_m = door_width_m
         self.buildings.append(b)
         self.grid.set_geometry(*self.geometry_for_grid(), self.site_polygon)
         b.footprint.gridded_segments(self.grid)
@@ -617,7 +699,19 @@ class Simulation:
         g = self.grid
         for name in ("rivers", "flood"):
             g.layers.remove(name)
-        for lyr in build_river_layers(g.xs, g.ys, self.rivers, self.season):
+        # river_weight scales crossing cost for this build only, so a saved
+        # river keeps the cost it was given
+        w = self.river_weight
+        kept = [r.crossing_cost for r in self.rivers]
+        try:
+            if w != 1.0:
+                for r in self.rivers:
+                    r.crossing_cost = r.crossing_cost * w
+            layers = build_river_layers(g.xs, g.ys, self.rivers, self.season)
+        finally:
+            for r, cost in zip(self.rivers, kept):
+                r.crossing_cost = cost
+        for lyr in layers:
             g.layers.add(lyr)
         g.refresh_layers(force=True)
         self._build_cost_fields()
@@ -714,6 +808,8 @@ class Simulation:
                     "polygon": b.footprint.as_xy(), "height": b.height, "layer": b.layer,
                     "phase_ids": list(b.phase_ids), "function": b.function,
                     "inhabitants": b.inhabitants, "state": b.state,
+                    "wall_m": b.wall_m, "door": list(b.door) if b.door else None,
+                    "door_width_m": b.door_width_m,
                 }
                 for b in self.buildings
             ],
@@ -811,6 +907,10 @@ class Simulation:
             )
             for b in data.get("buildings", [])
         ]
+        for built, b in zip(self.buildings, data.get("buildings", [])):
+            built.wall_m = b.get("wall_m")
+            built.door = tuple(b["door"]) if b.get("door") else None
+            built.door_width_m = float(b.get("door_width_m", 1.2))
         self.obstacles = [
             Building.from_polygon(
                 [tuple(p) for p in o["polygon"]], kind="obstacle",
