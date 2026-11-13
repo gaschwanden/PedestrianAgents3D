@@ -83,7 +83,9 @@
     mapReady: false,
   };
 
-  const worker = new Worker("worker.js");
+  // Same number as in index.html and sw.js: bump all three together so a
+  // browser never mixes files from two versions.
+  const worker = new Worker("worker.js?v=15");
   const canvas = document.createElement("canvas");
   let map = null;
 
