@@ -15,3 +15,10 @@ data/derived/
 python/data/packs/
 python/data/field/
 python/data/tracks_raw/
+
+# Field page build output: published to the gh-pages branch by
+# scripts/publish_field.sh, rebuilt with `python -m pedsim pack` and
+# scripts/fetch_pyodide.sh
+web/packs/
+web/vendor/pyodide/
+web/vendor/pedsim.zip

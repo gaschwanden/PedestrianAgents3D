@@ -1,9 +1,14 @@
 """Offline data packs for the field client.
 
-A full PMTiles archive needs an external tile toolchain. This builder writes
-the parts pedsim itself owns: village and cluster playback scenes, the route
-library, and the calendar / population tables. The browser plays those scenes
-back; it does not run a second agent model.
+``build_pack`` writes live scenes: for the cluster and for each usable site,
+the inputs of a :class:`~pedsim.simulation.Simulation` (terrain on the grid,
+geometry, rivers, georeference, solved cost fields). The field client rebuilds
+that simulation with :mod:`pedsim.live` and runs it on the device, so there is
+still one agent model. It also writes a hillshade basemap from the DEM, the
+route library and the calendar / population tables.
+
+``write_scene`` and ``write_cluster_scene`` are the older playback packs
+(recorded frames). They are kept for the tests and as a reference.
 """
 from __future__ import annotations
 
@@ -337,7 +342,161 @@ def write_cluster_scene(
     return path
 
 
-def build_pack(area: str = "goebekli", out_dir: str = "", publish_web: bool = False) -> str:
+# ------------------------------------------------------------------ live pack
+#: Sites left out of the village scenes, with the reason shown in the index.
+VILLAGE_SKIP = {
+    "Nevalı Çori": "submerged under the Atatürk reservoir; the modern DEM shows the lake surface",
+}
+
+
+def _slug(name: str) -> str:
+    from .app import slug
+    return slug(name)
+
+
+def _site_rows() -> List[dict]:
+    from . import maps
+    from .sites import located
+
+    rows = []
+    for site in located(usable_only=False):
+        rows.append({
+            "name": site.name,
+            "coordinates": [round(site.lon, 6), round(site.lat, 6)],
+            "start_bc": site.start_bc, "end_bc": site.end_bc,
+            "confidence": getattr(site.confidence, "value", str(site.confidence)),
+            "usable": bool(site.usable),
+            "official": bool(site.official),
+            "period": site.period,
+            "has_plan": bool(maps.has_village_plan(site.name)),
+        })
+    return rows
+
+
+def _write_live(root: str, sim, scene_id: str, name: str, scale: str, frame,
+                **kw) -> dict:
+    """Write ``<id>.json`` + ``<id>.bin`` and return the index row."""
+    from . import live
+
+    meta, blob = live.pack_scene(sim, scene_id, name, scale, frame, **kw)
+    meta.update(_shared_meta())
+    # Loading it back proves the pack is complete, and gives the client a
+    # ready description to draw before (or without) the engine.
+    engine = live.LiveEngine()
+    meta["display"] = engine.load(meta, blob)
+    with open(os.path.join(root, f"{scene_id}.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, ensure_ascii=False)
+    with open(os.path.join(root, f"{scene_id}.bin"), "wb") as fh:
+        fh.write(blob)
+    return {
+        "id": scene_id, "label": name, "scale": scale, "site": kw.get("site", ""),
+        "file": f"{scene_id}.json", "blob": f"{scene_id}.bin",
+        "bytes": len(blob), "note": kw.get("note", ""),
+        "center": meta["display"]["center"],
+    }
+
+
+def _saved_geometry(save_dir: str, name: str) -> str:
+    path = os.path.join(save_dir, f"{_slug(name)}.geometry.json")
+    return path if save_dir and os.path.exists(path) else ""
+
+
+def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
+                    village_extent: float = 900.0, village_cell: float = 3.0,
+                    cluster_cell: float = 250.0, progress=None) -> dict:
+    """Pack the cluster and one village per usable site for the live engine.
+
+    A ``<slug>.geometry.json`` saved by the desktop viewer in ``save_dir`` is
+    applied to its scene first, so walls and ODs drawn on the laptop travel.
+    """
+    from . import live, scenes
+    from .rivers import Season
+    from .sites import located
+
+    say = progress or (lambda _m: None)
+    os.makedirs(root, exist_ok=True)
+    rows = _site_rows()
+    import datetime as _dt
+
+    index = {
+        "default": "cluster",
+        "build": _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S"),
+        "scenes": [], "skipped": [],
+    }
+    real = scenes.data_available()
+
+    say("cluster")
+    sim = scenes.cluster_scene(cellsize=cluster_cell, seed=7)
+    sim.pack_seed = 7
+    saved = _saved_geometry(save_dir, "Taş Tepeler cluster")
+    if saved:
+        sim.load_geometry_json(saved)
+    sim.research.respect_chronology = True
+    grid = sim.grid
+    bounds = (grid.min_x, grid.min_y, grid.max_x, grid.max_y)
+    frame = live.BilinearFrame.from_frame(sim.frame, bounds, nodes=17)
+    index["scenes"].append(_write_live(
+        root, sim, "cluster", "Taş Tepeler cluster", "cluster", frame,
+        zoom=9.5, sites=rows, cost_seasons=list(Season),
+        note=("Copernicus GLO-30 terrain, HydroRIVERS watercourses" if real
+              else "synthetic relief: no DEM was downloaded when this pack was built"),
+    ))
+
+    for site in located(usable_only=True):
+        if sites_filter and site.name not in sites_filter:
+            continue
+        if site.name in VILLAGE_SKIP:
+            index["skipped"].append({"site": site.name, "reason": VILLAGE_SKIP[site.name]})
+            continue
+        say(site.name)
+        sim = scenes.village_scene(site.name, extent_m=village_extent,
+                                   cellsize=village_cell, seed=3)
+        sim.pack_seed = 3
+        saved = _saved_geometry(save_dir, site.name)
+        if saved:
+            sim.load_geometry_json(saved)
+        grid = sim.grid
+        bounds = (grid.min_x, grid.min_y, grid.max_x, grid.max_y)
+        frame = live.BilinearFrame.from_frame(sim.frame, bounds, nodes=3)
+        conf = getattr(site.confidence, "value", str(site.confidence))
+        walls = len(sim.buildings) + len(sim.obstacles)
+        note = f"coordinate: {conf}. "
+        note += (f"{walls} wall or building outlines from the saved desktop scene."
+                 if walls else "Terrain and perimeter gates only: no wall plan imported yet.")
+        row = _write_live(
+            root, sim, "village-" + _slug(site.name), site.name, "village", frame,
+            site=site.name, zoom=16.0, sites=[r for r in rows if r["name"] == site.name],
+            note=note,
+        )
+        row["confidence"] = conf
+        index["scenes"].append(row)
+
+    with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as fh:
+        json.dump(index, fh, indent=1, ensure_ascii=False)
+    return index
+
+
+def write_engine_zip(path: str) -> str:
+    """Zip the pure-Python package and its config for the in-browser engine."""
+    import zipfile
+
+    base = package_root()
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for folder in ("pedsim", os.path.join("data", "config"),
+                       os.path.join("data", "routes"), os.path.join("data", "schema")):
+            top = os.path.join(base, folder)
+            for dirpath, dirnames, filenames in os.walk(top):
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                for name in sorted(filenames):
+                    if name.endswith((".pyc", ".DS_Store")):
+                        continue
+                    full = os.path.join(dirpath, name)
+                    zf.write(full, os.path.relpath(full, base))
+    return path
+
+
+def build_pack(area: str = "goebekli", out_dir: str = "", publish_web: bool = False,
+               save_dir: str = "", sites_filter=None, progress=None) -> str:
     root = out_dir or os.path.join(package_root(), "data", "packs", area)
     os.makedirs(root, exist_ok=True)
     config = config_dir()
@@ -352,35 +511,46 @@ def build_pack(area: str = "goebekli", out_dir: str = "", publish_web: bool = Fa
         for name in os.listdir(routes):
             if name.endswith(".geojson"):
                 shutil.copy(os.path.join(routes, name), os.path.join(dest, name))
+    index = {}
     if area == "goebekli":
-        write_scene(root)
-        write_cluster_scene(root)
+        # The folder is build output: drop scenes from an earlier build so the
+        # index and the files on disk cannot disagree.
+        for name in os.listdir(root):
+            if name.endswith((".bin", ".jpg")) or (
+                    name.endswith(".json") and name != "manifest.json"):
+                os.remove(os.path.join(root, name))
+        index = write_live_pack(root, sites_filter=sites_filter, save_dir=save_dir,
+                                progress=progress)
+        from .basemap import write_basemap
+        index["basemap"] = write_basemap(root, progress=progress)
         with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as fh:
-            json.dump({
-                "default": "cluster",
-                "scenes": [
-                    {"id": "cluster", "file": "cluster.json", "label": "Cluster"},
-                    {"id": "village", "file": "scene.json", "label": "Village"},
-                ],
-            }, fh, indent=2)
+            json.dump(index, fh, indent=1, ensure_ascii=False)
     manifest = {
         "area": area,
-        "version": 2,
+        "version": 3,
         "contents": sorted(os.listdir(root)),
         "basemap": (
-            "Online satellite / Google tiles are used when the device is online. "
-            "They are not packed offline. Add basemap.pmtiles for offline maps."
+            "basemap.jpg is a hillshade rendered from the Copernicus DEM and is "
+            "packed for offline use. Satellite and street tiles are online only."
         ),
-        "simulation": "scene.json and cluster.json are pedsim playback packs.",
+        "simulation": (
+            "Each scene is <id>.json + <id>.bin: the inputs of a pedsim Simulation. "
+            "The field client rebuilds and runs it with pedsim itself."
+        ),
         "offline": True,
     }
     with open(os.path.join(root, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
     if publish_web:
-        web = os.path.abspath(os.path.join(package_root(), "..", "web", "packs", area))
+        web_root = os.path.abspath(os.path.join(package_root(), "..", "web"))
+        web = os.path.join(web_root, "packs", area)
         os.makedirs(web, exist_ok=True)
-        for name in ("scene.json", "cluster.json", "index.json", "manifest.json"):
-            src = os.path.join(root, name)
-            if os.path.exists(src):
-                shutil.copy(src, os.path.join(web, name))
+        for name in os.listdir(web):
+            if name.endswith((".json", ".bin", ".jpg", ".geojson")):
+                os.remove(os.path.join(web, name))
+        for name in sorted(os.listdir(root)):
+            if name.endswith((".json", ".bin", ".jpg", ".geojson")):
+                shutil.copy(os.path.join(root, name), os.path.join(web, name))
+        os.makedirs(os.path.join(web_root, "vendor"), exist_ok=True)
+        write_engine_zip(os.path.join(web_root, "vendor", "pedsim.zip"))
     return root

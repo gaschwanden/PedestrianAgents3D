@@ -38,9 +38,10 @@ The same Python package now carries the research layer in
 chronology and building phases, population and tasks, a gathering calendar,
 scenario files with run records, ensembles, the Taş Tepeler network, a regional
 obsidian fit, field-track calibration, and GIS export. The desktop viewer has a
-Research tab. A field page lives in `web/` (Java-style red tools, pitched map, cluster and
-village packs) and is served with `python -m pedsim serve` from the `python/`
-directory. The decisions behind the defaults, and the parts that are still
+Research tab. A field page lives in `web/` (Java-style red tools, pitched map). It
+runs the same Python model in the browser, offline, on the Taş Tepeler cluster
+and on one village scene per site; build its data with `python -m pedsim pack`
+and serve it with `python -m pedsim serve` from the `python/` directory. The decisions behind the defaults, and the parts that are still
 partial, are in section 15 and section 17 of that catalogue. The model
 description is [`docs/ODD.md`](docs/ODD.md).
 

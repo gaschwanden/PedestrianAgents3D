@@ -110,7 +110,8 @@ def dem_tiles(pattern: str) -> List[str]:
 def load_dem(paths: Sequence[str], frame: LocalFrame,
              bounds: Tuple[float, float, float, float],
              cellsize: float = 30.0,
-             nodata_fill: Optional[float] = None) -> Topography:
+             nodata_fill: Optional[float] = None,
+             interpolate: Optional[bool] = None) -> Topography:
     """Resample GeoTIFF tiles onto a local metric grid.
 
     Parameters
@@ -126,6 +127,12 @@ def load_dem(paths: Sequence[str], frame: LocalFrame,
     cellsize:
         Destination cell size in metres. Do not go below the source resolution
         (~30 m for GLO-30) expecting more detail -- you will only interpolate.
+    interpolate:
+        Blend the four surrounding DEM posts instead of taking the nearest one.
+        ``None`` (default) turns it on when ``cellsize`` is finer than half the
+        source spacing. Without it a 3 m grid over a 30 m DEM is a staircase:
+        flat treads ten cells wide separated by one-cell risers of several
+        metres, which the slope model reads as cliffs every 30 m.
     nodata_fill:
         Value for cells no tile covers. ``None`` fills them with the mean of
         what was sampled, which keeps the cost model finite; the caller should
@@ -166,6 +173,12 @@ def load_dem(paths: Sequence[str], frame: LocalFrame,
             vals = band[rows, cols].astype(float)
             if src.nodata is not None:
                 vals[vals == src.nodata] = np.nan
+            smooth = interpolate
+            if smooth is None:
+                post_m = abs(src.transform.e) * 111320.0     # source spacing, metres
+                smooth = cellsize < 0.5 * post_m
+            if smooth:
+                vals = _bilinear(src, band, lon[inside], lat[inside], vals)
             out[inside] = vals
 
     if np.isnan(out).any():
@@ -174,6 +187,39 @@ def load_dem(paths: Sequence[str], frame: LocalFrame,
             fill = float(np.nanmean(out)) if np.isfinite(out).any() else 0.0
         out = np.where(np.isnan(out), fill, out)
     return Topography(out, x0=float(xs[0]), y0=float(ys[0]), cellsize=cellsize)
+
+
+def _bilinear(src, band: np.ndarray, lon: np.ndarray, lat: np.ndarray,
+              nearest: np.ndarray) -> np.ndarray:
+    """Bilinear DEM value at each point; ``nearest`` where a neighbour is nodata.
+
+    Posts sit at pixel centres. Points in the outer half pixel of a tile are
+    clamped to its last two rows or columns rather than reaching into the next
+    tile, which is exact enough at a 30 m spacing.
+    """
+    inv = ~src.transform
+    lon = np.asarray(lon, dtype=float)
+    lat = np.asarray(lat, dtype=float)
+    colf = inv.a * lon + inv.b * lat + inv.c
+    rowf = inv.d * lon + inv.e * lat + inv.f
+    r = np.clip(np.asarray(rowf) - 0.5, 0.0, src.height - 1.0)
+    c = np.clip(np.asarray(colf) - 0.5, 0.0, src.width - 1.0)
+    r0 = np.minimum(r.astype(int), src.height - 2)
+    c0 = np.minimum(c.astype(int), src.width - 2)
+    fr = r - r0
+    fc = c - c0
+    z00 = band[r0, c0].astype(float)
+    z01 = band[r0, c0 + 1].astype(float)
+    z10 = band[r0 + 1, c0].astype(float)
+    z11 = band[r0 + 1, c0 + 1].astype(float)
+    top = z00 + (z01 - z00) * fc
+    bottom = z10 + (z11 - z10) * fc
+    out = top + (bottom - top) * fr
+    if src.nodata is not None:
+        bad = ((z00 == src.nodata) | (z01 == src.nodata)
+               | (z10 == src.nodata) | (z11 == src.nodata))
+        out = np.where(bad, nearest, out)
+    return out
 
 
 def _clip_run(path: List[Tuple[float, float]],

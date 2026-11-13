@@ -11,8 +11,10 @@
     { id: "odWeight", label: "+/-", tip: "tipOdWeight", group: "mode" },
     { id: "odSave", label: "save", tip: "tipOdSave", group: "action" },
     { id: "odLoad", label: "open", tip: "tipOdLoad", group: "action" },
+    { id: "export", label: "file", tip: "tipExport", group: "action" },
     { id: "bdCircle", label: "B○", tip: "tipBdCircle", group: "mode" },
     { id: "bdRect", label: "B▭", tip: "tipBdRect", group: "mode" },
+    { id: "bdDelete", label: "B-", tip: "tipBdDelete", group: "mode" },
     { id: "run", label: "▶", tip: "tipRun", group: "action" },
     { id: "pause", label: "❚❚", tip: "tipPause", group: "action" },
     { id: "record", label: "REC", tip: "tipRecord", group: "toggle" },
@@ -24,38 +26,56 @@
     { id: "reset", label: "X", tip: "tipReset", group: "action" },
   ];
 
+  const PACK = "packs/goebekli/";
+  // Must match sw.js: the offline download writes into the same cache.
+  const CACHE = "pedsim-field-v14";
+  const ENGINE_FILES = [
+    "vendor/pedsim.zip",
+    "vendor/pyodide/pyodide.js",
+    "vendor/pyodide/pyodide.asm.js",
+    "vendor/pyodide/pyodide.asm.wasm",
+    "vendor/pyodide/python_stdlib.zip",
+    "vendor/pyodide/pyodide-lock.json",
+    "vendor/pyodide/numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+    "vendor/pyodide/pyyaml-6.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+    "vendor/fonts/Noto Sans Regular/0-255.pbf",
+    "vendor/fonts/Noto Sans Regular/256-511.pbf",
+    "vendor/fonts/Noto Sans Regular/8192-8447.pbf",
+  ];
+
   const state = {
     lang: localStorage.getItem("pedsim-lang") || "en",
-    scene: null,
-    scenes: {},
-    scale: "cluster",
-    rows: null,
-    active: [],
+    index: null,          // packs/<area>/index.json
+    sceneId: "",
+    meta: null,           // packed scene description (inputs of the Simulation)
+    desc: null,           // what the engine says is there now: ODs, buildings, sites
+    frame: null,          // last engine snapshot
+    engine: "boot",
+    awaiting: false,
     overrides: {},
     playing: false,
     timer: null,
     displayTimer: null,
-    lastFrame: 0,
-    fps: 0,
-    agentFrom: [],
-    agentTo: [],
+    stepMs: 0,
+    stepsPerTick: 2,
+    agentFrom: new Map(),
+    agentTo: new Map(),
     agentShown: [],
     lerpStart: 0,
-    // Packed steps advance slowly; display lerps between them at ~30 Hz.
-    playStepMs: 320,
-    playStepMsLow: 700,
-    lerpMs: 320,
+    playStepMs: 300,
+    lerpMs: 300,
     analysis: "path",
     mode: null,
     recording: false,
     watch: null,
     track: { id: "t" + Date.now(), points: [] },
-    customOds: [],
-    customBuildings: [],
     template: null, // {shape, a, b}
-    odWeight: 1,
     showIso: false,
+    hadTraces: false,
     low: false,
+    autosave: true,
+    proxy: false,         // true when pedsim serve is behind this page (tiles, hub)
+    mapReady: false,
   };
 
   const worker = new Worker("worker.js");
@@ -87,27 +107,27 @@
     document.getElementById("net").textContent = online ? t("online") : t("offline");
     const select = document.getElementById("basemap");
     Array.prototype.forEach.call(select.options, function (option) {
-      if (option.value === "none") {
-        option.disabled = false;
-        return;
-      }
-      option.disabled = !online;
+      // Relief is in the pack; every other basemap is fetched tile by tile
+      // through the laptop's tile proxy, which a static host does not have.
+      option.disabled = !(online && state.proxy) && option.value !== "none" && option.value !== "relief";
     });
-    if (!online && select.value !== "none") {
-      select.value = "none";
-      setBasemap("none");
+    if (!(online && state.proxy) && select.value !== "none" && select.value !== "relief") {
+      select.value = "relief";
+      setBasemap("relief");
     }
   }
 
   function db() {
     return new Promise(function (resolve, reject) {
-      const request = indexedDB.open("pedsim-field", 3);
+      const request = indexedDB.open("pedsim-field", 4);
       request.onupgradeneeded = function () {
         const base = request.result;
         if (!base.objectStoreNames.contains("notes")) base.createObjectStore("notes", { keyPath: "id" });
         if (!base.objectStoreNames.contains("tracks")) base.createObjectStore("tracks", { keyPath: "id" });
         if (!base.objectStoreNames.contains("ods")) base.createObjectStore("ods", { keyPath: "id" });
         if (!base.objectStoreNames.contains("buildings")) base.createObjectStore("buildings", { keyPath: "id" });
+        // one saved geometry per scene id, in the desktop save format
+        if (!base.objectStoreNames.contains("saves")) base.createObjectStore("saves", { keyPath: "id" });
       };
       request.onsuccess = function () { resolve(request.result); };
       request.onerror = function () { reject(request.error); };
@@ -199,7 +219,7 @@
   }
 
   function mapEditLocked() {
-    return state.mode === "bdCircle" || state.mode === "bdRect"
+    return state.mode === "bdCircle" || state.mode === "bdRect" || state.mode === "bdDelete"
       || state.mode === "odAdd" || state.mode === "odDelete" || state.mode === "odWeight"
       || state.recording;
   }
@@ -225,7 +245,6 @@
       let on = false;
       if (id === state.analysis) on = true;
       if (id === state.mode) on = true;
-      if ((id === "bdCircle" || id === "bdRect") && state.mode === id) on = true;
       if (id === "record" && state.recording) on = true;
       if (id === "iso" && state.showIso) on = true;
       if (id === "run" && state.playing) on = true;
@@ -248,23 +267,32 @@
     return { startBc: startBc, endBc: endBc };
   }
 
-  function sendToggles() {
+  function currentToggles() {
     const phases = {};
     document.querySelectorAll("#phases input").forEach(function (box) {
       phases[box.value] = box.checked;
     });
     const window = chronologyWindow();
-    worker.postMessage({
-      type: "setToggles",
-      toggles: {
-        chronology: document.getElementById("chrono").checked,
-        startBc: window.startBc,
-        endBc: window.endBc,
-        season: document.getElementById("season").value,
-        phases: phases,
-        overrides: state.overrides,
-      },
-    });
+    return {
+      chronology: document.getElementById("chrono").checked,
+      startBc: window.startBc,
+      endBc: window.endBc,
+      season: document.getElementById("season").value || "normal",
+      phases: phases,
+      overrides: state.overrides,
+      analysis: state.analysis,
+      agents: Number(document.getElementById("agents").value),
+    };
+  }
+
+  // Slider drags fire many events; the engine only needs the last one.
+  let toggleTimer = null;
+  function sendToggles() {
+    if (toggleTimer) clearTimeout(toggleTimer);
+    toggleTimer = setTimeout(function () {
+      toggleTimer = null;
+      worker.postMessage({ type: "setToggles", toggles: currentToggles() });
+    }, 120);
   }
 
   function ramp(amount) {
@@ -284,42 +312,49 @@
   }
 
   function paint() {
-    const rows = state.rows;
-    if (!rows || !rows.length || !map || !map.getLayer("density")) return;
-    if (state.analysis !== "path" && state.analysis !== "traces" && state.analysis !== "tracesO") {
-      map.setPaintProperty("density", "raster-opacity", 0);
-      return;
-    }
-    const ny = rows.length;
-    const nx = rows[0].length;
+    const frame = state.frame;
+    if (!frame || !map || !map.getLayer("density")) return;
+    const nx = frame.nx;
+    const ny = frame.ny;
+    const field = frame.field;
+    const channels = frame.channels || 1;
     if (canvas.width !== nx || canvas.height !== ny) {
       canvas.width = nx;
       canvas.height = ny;
     }
     const ctx = canvas.getContext("2d");
     const image = ctx.createImageData(nx, ny);
-    let max = 0;
-    rows.forEach(function (row) {
-      row.forEach(function (value) { if (value > max) max = value; });
-    });
+    const max = frame.max || 0;
     const cutoff = Number(document.getElementById("cutoff").value) * max;
     const useLog = document.getElementById("log").checked;
-    for (let y = 0; y < ny; y++) {
-      for (let x = 0; x < nx; x++) {
-        let value = rows[y][x];
-        if (value < cutoff) value = 0;
-        let tone = max > 0 ? value / max : 0;
-        if (useLog && tone > 0) tone = Math.log1p(tone * 9) / Math.log(10);
-        const pixel = (y * nx + x) * 4;
-        if (tone <= 0) {
-          image.data[pixel + 3] = 0;
-          continue;
-        }
-        const rgb = ramp(tone);
+    const size = nx * ny;
+    const tone = function (value) {
+      if (value < cutoff || max <= 0) return 0;
+      let amount = value / max;
+      if (useLog && amount > 0) amount = Math.log1p(amount * 9) / Math.log(10);
+      return amount;
+    };
+    for (let k = 0; k < size; k++) {
+      const pixel = k * 4;
+      if (channels === 1) {
+        const amount = tone(field[k]);
+        if (amount <= 0) continue;
+        const rgb = ramp(amount);
         image.data[pixel] = rgb[0];
         image.data[pixel + 1] = rgb[1];
         image.data[pixel + 2] = rgb[2];
         image.data[pixel + 3] = 210;
+      } else {
+        // one colour per origin group: red, green, blue, as in the Java tool
+        const r = tone(field[k]);
+        const g = tone(field[size + k]);
+        const b = channels > 2 ? tone(field[2 * size + k]) : 0;
+        const top = Math.max(r, g, b);
+        if (top <= 0) continue;
+        image.data[pixel] = Math.round(255 * r / top);
+        image.data[pixel + 1] = Math.round(255 * g / top);
+        image.data[pixel + 2] = Math.round(255 * b / top);
+        image.data[pixel + 3] = Math.round(90 + 150 * top);
       }
     }
     ctx.putImageData(image, 0, 0);
@@ -335,38 +370,39 @@
     };
   }
 
+  const GROUP_COLOURS = ["#ff5a4d", "#4ddc6a", "#5aa2ff"];
+
   function syncAgents(points) {
     if (!map || !map.getSource("agents")) return;
     state.agentShown = points || [];
     map.getSource("agents").setData({
       type: "FeatureCollection",
-      features: state.agentShown.map(function (pair) {
-        return featurePoint(pair, { kind: "agent" });
+      features: state.agentShown.map(function (item) {
+        return featurePoint([item[0], item[1]], { group: item[2] });
       }),
     });
   }
 
-  function lerpAgents(now) {
-    const from = state.agentFrom;
-    const to = state.agentTo;
-    if (!to.length) {
-      syncAgents([]);
-      return;
-    }
-    if (!from.length) {
-      syncAgents(to);
-      return;
-    }
-    const span = Math.max(1, state.lerpMs);
-    const t = Math.min(1, Math.max(0, (now - state.lerpStart) / span));
-    const n = Math.max(from.length, to.length);
-    const out = [];
+  function agentsFromFrame(frame) {
+    const out = new Map();
+    const n = frame.n_agents || 0;
     for (let i = 0; i < n; i++) {
-      const a = from[i] || to[i];
-      const b = to[i] || from[i];
-      if (!a || !b) continue;
-      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      out.set(frame.ids[i], [frame.agents[2 * i], frame.agents[2 * i + 1], frame.groups[i]]);
     }
+    return out;
+  }
+
+  function lerpAgents(now) {
+    const to = state.agentTo;
+    const from = state.agentFrom;
+    const span = Math.max(1, state.lerpMs);
+    const amount = Math.min(1, Math.max(0, (now - state.lerpStart) / span));
+    const out = [];
+    to.forEach(function (b, id) {
+      // a walker that was just released has no previous position: no tween
+      const a = from.get(id) || b;
+      out.push([a[0] + (b[0] - a[0]) * amount, a[1] + (b[1] - a[1]) * amount, b[2]]);
+    });
     syncAgents(out);
   }
 
@@ -434,201 +470,239 @@
       const dx = b[0] - a[0];
       const dy = b[1] - a[1];
       const L2 = dx * dx + dy * dy;
-      const t = L2 <= 0 ? 0 : Math.max(0, Math.min(1, ((door[0] - a[0]) * dx + (door[1] - a[1]) * dy) / L2));
-      const proj = [a[0] + t * dx, a[1] + t * dy];
+      const s = L2 <= 0 ? 0 : Math.max(0, Math.min(1, ((door[0] - a[0]) * dx + (door[1] - a[1]) * dy) / L2));
+      const proj = [a[0] + s * dx, a[1] + s * dy];
       const d = Math.hypot(door[0] - proj[0], door[1] - proj[1]);
       if (d < bestD) {
         bestD = d;
-        const len = Math.sqrt(L2);
-        best = { proj: proj, dx: dx, dy: dy, len: len };
+        best = { proj: proj };
       }
     }
-    if (!best || best.len <= 0) return door;
+    if (!best) return door;
+    // Step out from the facade, away from the footprint's centre, by a few
+    // cells so the entrance lands on walkable ground whatever the winding.
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < ring.length - 1; i++) { cx += ring[i][0]; cy += ring[i][1]; }
+    cx /= ring.length - 1;
+    cy /= ring.length - 1;
     const m = metresPerDegree(best.proj[1]);
-    const nx = -best.dy / best.len;
-    const ny = best.dx / best.len;
-    const offsetLon = (3 * nx) / m.lon;
-    const offsetLat = (3 * ny) / m.lat;
-    return [best.proj[0] + offsetLon, best.proj[1] + offsetLat];
+    const ox = (best.proj[0] - cx) * m.lon;
+    const oy = (best.proj[1] - cy) * m.lat;
+    const len = Math.hypot(ox, oy) || 1;
+    const out = Math.max(3, 2 * ((state.desc && state.desc.grid.gridsize) || 2));
+    return [best.proj[0] + (out * ox / len) / m.lon, best.proj[1] + (out * oy / len) / m.lat];
+  }
+
+  function setData(source, features) {
+    if (!map || !map.getSource(source)) return;
+    map.getSource(source).setData({ type: "FeatureCollection", features: features });
   }
 
   function syncBuildings() {
-    if (!map || !map.getSource("buildings")) return;
-    const active = {};
-    state.active.forEach(function (id) { active[id] = true; });
-    const packed = (state.scene.buildings || []).filter(function (building) {
-      if (!building.phase_ids || !building.phase_ids.length) return true;
-      return building.phase_ids.some(function (id) { return active[id]; });
+    const desc = state.desc;
+    if (!desc) return;
+    const phaseColour = {};
+    (desc.phases || []).forEach(function (phase) { phaseColour[phase.id] = phase.colour; });
+    setData("buildings", (desc.buildings || []).filter(function (building) {
+      return building.active && building.state !== "backfilled";
     }).map(function (building) {
+      const first = (building.phase_ids || [])[0];
       return {
         type: "Feature",
         properties: {
-          colour: "#9aa3ad",
+          colour: (first && phaseColour[first]) || "#9aa3ad",
           name: building.name,
-          height: 3,
+          height: building.height || 3,
         },
         geometry: { type: "Polygon", coordinates: [building.ring] },
       };
-    });
-    const custom = state.customBuildings.filter(function (building) {
-      return !building.scale || building.scale === state.scale;
-    }).map(function (building) {
+    }));
+    setData("obstacles", (desc.obstacles || []).map(function (item) {
       return {
-        type: "Feature",
-        properties: {
-          colour: "#9aa3ad",
-          name: building.name || building.shape,
-          height: 3,
-        },
-        geometry: { type: "Polygon", coordinates: [building.ring] },
+        type: "Feature", properties: { layer: item.layer },
+        geometry: { type: "Polygon", coordinates: [item.ring] },
       };
-    });
-    map.getSource("buildings").setData({
-      type: "FeatureCollection",
-      features: packed.concat(custom),
-    });
+    }));
+  }
+
+  function villageFor(siteName) {
+    const scenes = (state.index && state.index.scenes) || [];
+    for (let i = 0; i < scenes.length; i++) {
+      if (scenes[i].scale === "village" && scenes[i].site === siteName) return scenes[i];
+    }
+    return null;
   }
 
   function syncSites() {
-    if (!map || !map.getSource("sites")) return;
-    map.getSource("sites").setData({
-      type: "FeatureCollection",
-      features: (state.scene.sites || []).map(function (site) {
-        return featurePoint(site.coordinates, {
-          name: site.name,
-          official: site.official ? 1 : 0,
-          period: site.period || "",
-        });
-      }),
-    });
-  }
-
-  function allOds() {
-    const packed = (state.scene.ods || []).map(function (od, index) {
-      return {
-        id: "pack-" + index,
-        name: od.name,
-        kind: od.kind || "site",
-        coordinates: od.coordinates,
-        custom: false,
-        weight: od.dest_weight || 1,
-      };
-    });
-    return packed.concat(state.customOds);
+    const desc = state.desc;
+    if (!desc) return;
+    setData("sites", (desc.sites || []).map(function (site) {
+      return featurePoint(site.coordinates, {
+        name: site.name,
+        official: site.official ? 1 : 0,
+        active: site.active ? 1 : 0,
+        usable: site.usable === false ? 0 : 1,
+        village: villageFor(site.name) ? 1 : 0,
+        label: site.name + (site.usable === false ? " ?" : ""),
+      });
+    }));
   }
 
   function syncOds() {
-    if (!map || !map.getSource("ods")) return;
-    map.getSource("ods").setData({
-      type: "FeatureCollection",
-      features: allOds().map(function (od) {
-        return featurePoint(od.coordinates, {
-          name: od.name,
-          kind: od.kind,
-          custom: od.custom ? 1 : 0,
-          weight: od.weight || 1,
-        });
-      }),
+    const desc = state.desc;
+    if (!desc) return;
+    // At cluster scale every OD is a site and the site marker already shows it.
+    const show = (desc.ods || []).filter(function (od) {
+      return desc.scale !== "cluster" || od.kind !== "site";
     });
+    setData("ods", show.map(function (od) {
+      return featurePoint(od.coordinates, {
+        name: od.name,
+        kind: od.kind,
+        active: od.active ? 1 : 0,
+        weight: od.dest_weight,
+      });
+    }));
   }
 
-  function syncLinks() {
-    if (!map || !map.getSource("links")) return;
-    map.getSource("links").setData({
-      type: "FeatureCollection",
-      features: (state.scene.links || []).map(function (link) {
-        return {
-          type: "Feature",
-          properties: { from: link.from, to: link.to },
-          geometry: { type: "LineString", coordinates: link.coordinates },
-        };
-      }),
-    });
+  function syncRivers() {
+    const desc = state.desc;
+    if (!desc) return;
+    setData("rivers", (desc.rivers || []).map(function (river) {
+      return {
+        type: "Feature",
+        properties: { name: river.name, perennial: river.perennial ? 1 : 0 },
+        geometry: { type: "LineString", coordinates: river.coordinates },
+      };
+    }));
+  }
+
+  function syncTraces(frame) {
+    const byGroup = frame.analysis === "tracesO";
+    setData("traces", (frame.traces || []).map(function (trace) {
+      return {
+        type: "Feature",
+        properties: { colour: byGroup ? GROUP_COLOURS[trace.group % 3] : "#3c78ff" },
+        geometry: { type: "LineString", coordinates: trace.coordinates },
+      };
+    }));
   }
 
   function syncTrack() {
-    if (!map || !map.getSource("track")) return;
     const points = state.track.points || [];
-    map.getSource("track").setData({
-      type: "FeatureCollection",
-      features: points.length < 2 ? points.map(function (point) {
-        return featurePoint([point.lon, point.lat], { t: point.t || "" });
-      }) : [{
-        type: "Feature",
-        properties: {},
-        geometry: {
-          type: "LineString",
-          coordinates: points.map(function (point) { return [point.lon, point.lat]; }),
-        },
-      }],
-    });
+    setData("track", points.length < 2 ? points.map(function (point) {
+      return featurePoint([point.lon, point.lat], { t: point.t || "" });
+    }) : [{
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "LineString",
+        coordinates: points.map(function (point) { return [point.lon, point.lat]; }),
+      },
+    }]);
   }
 
-  function syncIso(center) {
-    if (!map || !map.getSource("iso")) return;
-    if (!state.showIso || !center) {
-      map.getSource("iso").setData({ type: "FeatureCollection", features: [] });
-      return;
-    }
-    const ring = [];
-    for (let i = 0; i <= 32; i++) {
-      const angle = (i / 32) * Math.PI * 2;
-      ring.push([
-        center[0] + 0.002 * Math.cos(angle),
-        center[1] + 0.0016 * Math.sin(angle),
-      ]);
-    }
-    map.getSource("iso").setData({
-      type: "FeatureCollection",
-      features: [{
-        type: "Feature",
-        properties: {},
-        geometry: { type: "Polygon", coordinates: [ring] },
-      }],
-    });
+  function syncIso(ring) {
+    setData("iso", state.showIso && ring && ring.length > 3 ? [{
+      type: "Feature", properties: {},
+      geometry: { type: "Polygon", coordinates: [ring] },
+    }] : []);
   }
 
-  function showMetrics(message) {
-    const season = document.getElementById("season").value;
-    const lines = [
-      (state.scene.scale || state.scale) + " · " + (state.scene.name || ""),
-      "phases: " + (state.active.join(", ") || "none"),
-      "season: " + season + (message.daylight != null ? (" · " + message.daylight + " min day") : ""),
-      "ODs: " + allOds().length + " · custom " + state.customOds.length,
-      "step " + (message.step || 0) + " · peak " + (message.max || 0).toFixed(3),
-      "playback " + state.fps.toFixed(1) + " frames/s",
-    ];
+  function showMetrics(frame) {
+    const desc = state.desc;
+    if (!desc) return;
+    const lines = [desc.name + " · " + desc.grid.nx + "×" + desc.grid.ny + " cells of " + desc.grid.gridsize + " m"];
+    if (desc.note) lines.push(desc.note);
+    (desc.hud || []).forEach(function (line) { lines.push(line); });
+    lines.push("season: " + frame.season + (frame.daylight ? " · " + frame.daylight + " min daylight" : ""));
+    lines.push("places: " + (desc.ods || []).length + " · buildings: " + (desc.buildings || []).length
+      + (desc.edited ? " · edited" : ""));
+    if (frame.live) {
+      lines.push("step " + frame.step + " · " + frame.n_agents + " walkers · peak " + (frame.max || 0).toFixed(2));
+      if (state.stepMs) {
+        lines.push(t("engineLive") + " · " + (1000 / state.stepMs).toFixed(1) + " steps/s");
+      } else {
+        lines.push(t("engineLive"));
+      }
+    } else {
+      lines.push(t("engineOff") + (frame.reason ? ": " + frame.reason : ""));
+    }
     document.getElementById("metrics").textContent = lines.join("\n");
-    document.getElementById("scale-label").textContent =
-      state.scale === "cluster" ? t("cluster") : t("village");
+    document.getElementById("scale-label").textContent = desc.scale === "cluster" ? t("cluster") : desc.name;
+    const active = {};
+    (desc.active || []).forEach(function (id) { active[id] = true; });
     document.querySelectorAll("#phases input").forEach(function (box) {
       if (!Object.prototype.hasOwnProperty.call(state.overrides, box.value)) {
-        box.checked = state.active.indexOf(box.value) >= 0;
+        box.checked = Boolean(active[box.value]);
       }
     });
+  }
+
+  function applyDescribe(desc) {
+    const first = !state.desc || state.desc.id !== desc.id;
+    state.desc = desc;
+    if (first) {
+      fillSceneControls();
+      applySceneToMap();
+    } else {
+      syncBuildings();
+      syncSites();
+      syncOds();
+      syncRivers();
+    }
+    if (desc.edited && state.autosave) {
+      worker.postMessage({ type: "export", purpose: "autosave" });
+    }
   }
 
   worker.onmessage = function (event) {
     const message = event.data || {};
-    if (message.type !== "frame") return;
-    const now = performance.now();
-    if (state.lastFrame) {
-      const dt = now - state.lastFrame;
-      if (dt > 0) state.fps = state.fps ? state.fps * 0.7 + (1000 / dt) * 0.3 : 1000 / dt;
+    if (message.type === "status") {
+      state.engine = message.phase;
+      if (message.phase === "boot") setStatus(t("engineBoot") + " (" + message.text + ")");
+      if (message.phase === "scene") setStatus(t("sceneLoading") + " " + message.text);
+      if (message.phase === "loaded") setStatus(message.text);
+      if (message.phase === "failed") setStatus(t("engineOff") + ": " + message.text);
+      return;
     }
-    state.lastFrame = now;
-    state.rows = message.rows;
-    state.active = message.active || [];
+    if (message.type === "error") {
+      state.awaiting = false;
+      setStatus("engine: " + message.text);
+      return;
+    }
+    if (message.type === "geometry") {
+      const record = { id: message.data.scene.id, saved: new Date().toISOString(), geometry: message.data };
+      put("saves", record);
+      if (message.purpose === "download") {
+        download(record.id + ".geometry.json",
+          new Blob([JSON.stringify(message.data)], { type: "application/json" }));
+        setStatus(t("exported"));
+      } else if (message.purpose === "save") {
+        setStatus(t("saved"));
+      }
+      return;
+    }
+    if (message.type !== "frame") return;
+    state.awaiting = false;
+    if (message.scene !== state.sceneId) return;   // a late frame from the previous scene
+    const now = performance.now();
+    if (message.steps) {
+      const per = message.ms / message.steps;
+      state.stepMs = state.stepMs ? state.stepMs * 0.7 + per * 0.3 : per;
+    }
+    if (message.describe) applyDescribe(message.describe);
+    state.frame = message;
     paint();
-    const next = message.agents || [];
-    state.agentFrom = state.agentShown.length ? state.agentShown.slice() : (state.agentTo.slice());
-    state.agentTo = next;
+    state.agentFrom = state.agentTo;
+    state.agentTo = agentsFromFrame(message);
     state.lerpStart = now;
-    if (!state.playing) syncAgents(next);
-    syncBuildings();
-    syncSites();
-    syncOds();
-    syncLinks();
+    state.lerpMs = Math.max(state.playStepMs, message.ms || 0);
+    if (!state.playing) lerpAgents(now + state.lerpMs);
+    if (message.traces || state.hadTraces) syncTraces(message);
+    state.hadTraces = Boolean(message.traces);
+    syncIso(message.isovist);
     syncTrack();
     showMetrics(message);
   };
@@ -658,10 +732,32 @@
     },
   };
 
+  function firstOverlay() {
+    return map.getLayer("density") ? "density" : undefined;
+  }
+
   function setBasemap(kind) {
-    if (!map || !map.isStyleLoaded()) return;
-    if (map.getLayer("basemap")) map.removeLayer("basemap");
-    if (map.getSource("basemap")) map.removeSource("basemap");
+    // Not isStyleLoaded(): that is false while any source is still loading,
+    // which would silently drop the basemap chosen during start-up.
+    if (!map || !state.styleReady) return;
+    ["basemap", "relief"].forEach(function (id) {
+      if (map.getLayer(id)) map.removeLayer(id);
+      if (map.getSource(id)) map.removeSource(id);
+    });
+    const relief = state.index && state.index.basemap;
+    if (kind === "relief") {
+      if (!relief || !relief.file) return;
+      map.addSource("relief", {
+        type: "image",
+        url: PACK + relief.file + "?v=" + state.index.build,
+        coordinates: relief.corners,
+      });
+      map.addLayer({
+        id: "relief", type: "raster", source: "relief",
+        paint: { "raster-opacity": 1, "raster-fade-duration": 0 },
+      }, firstOverlay());
+      return;
+    }
     if (!TILES[kind] || !navigator.onLine) return;
     map.addSource("basemap", {
       type: "raster",
@@ -671,16 +767,15 @@
       maxzoom: 20,
     });
     // Keep imagery under the density / site overlays.
-    const before = map.getLayer("density") ? "density"
-      : (map.getLayer("links") ? "links" : undefined);
     map.addLayer({
       id: "basemap",
       type: "raster",
       source: "basemap",
       paint: { "raster-opacity": 1, "raster-fade-duration": 0 },
-    }, before);
-    window.__pedsimMap = map;
+    }, firstOverlay());
   }
+
+  const LABEL_FONT = ["Noto Sans Regular"];
 
   function ensureMap() {
     if (map) return;
@@ -688,7 +783,8 @@
       container: "map",
       style: {
         version: 8,
-        glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+        // Label glyphs ship with the app, so place names also draw offline.
+        glyphs: new URL("vendor/fonts/", window.location.href).href + "{fontstack}/{range}.pbf",
         sources: {},
         layers: [{ id: "background", type: "background", paint: { "background-color": "#111111" } }],
       },
@@ -701,49 +797,61 @@
     });
     window.__pedsimMap = map;
     map.on("error", function (event) {
-      window.__lastErr = (event && event.error && event.error.message) || String(event);
-      setStatus("map: " + window.__lastErr);
+      const text = (event && event.error && event.error.message) || String(event);
+      window.__lastErr = text;
+      // A missing glyph or tile while offline is expected, not worth the status line.
+      if (navigator.onLine) setStatus("map: " + text);
     });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "metric", maxWidth: 120 }), "bottom-right");
     map.addControl(new maplibregl.AttributionControl({
       compact: true,
-      customAttribution: "pedsim playback · Java-style tools · Google/Esri tiles online only, not cached",
+      customAttribution: "pedsim live · relief © Copernicus DEM (DLR / Airbus, EU, ESA) · Google/Esri tiles online only, not cached",
     }));
     map.on("load", function () {
       try {
-        // Imagery first so a later overlay failure cannot leave a black map.
-        setBasemap(document.getElementById("basemap").value);
         const empty = { type: "FeatureCollection", features: [] };
-        const bounds = (state.scene && state.scene.bounds) || {
-          west: 38.4, south: 36.8, east: 39.3, north: 37.5,
-        };
+        state.styleReady = true;
         map.addSource("density", {
           type: "canvas",
           canvas: canvas,
-          coordinates: [
-            [bounds.west, bounds.north],
-            [bounds.east, bounds.north],
-            [bounds.east, bounds.south],
-            [bounds.west, bounds.south],
-          ],
+          coordinates: [[38.4, 37.5], [39.3, 37.5], [39.3, 36.8], [38.4, 36.8]],
           animate: true,
         });
         map.addLayer({
           id: "density", type: "raster", source: "density",
-          paint: { "raster-opacity": Number(document.getElementById("opacity").value) },
+          paint: {
+            "raster-opacity": Number(document.getElementById("opacity").value),
+            "raster-resampling": "nearest",
+            "raster-fade-duration": 0,
+          },
         });
-        map.addSource("links", { type: "geojson", data: empty });
+        setBasemap(document.getElementById("basemap").value);
+        map.addSource("rivers", { type: "geojson", data: empty });
         map.addLayer({
-          id: "links", type: "line", source: "links",
-          paint: { "line-color": "#ff5555", "line-width": 1.2, "line-opacity": 0.45 },
+          id: "rivers", type: "line", source: "rivers",
+          paint: {
+            "line-color": "#4aa3ff",
+            "line-width": ["case", ["==", ["get", "perennial"], 1], 2.2, 1.2],
+            "line-opacity": 0.75,
+          },
+        });
+        map.addSource("traces", { type: "geojson", data: empty });
+        map.addLayer({
+          id: "traces", type: "line", source: "traces",
+          paint: { "line-color": ["get", "colour"], "line-width": 1.2, "line-opacity": 0.7 },
+        });
+        map.addSource("obstacles", { type: "geojson", data: empty });
+        map.addLayer({
+          id: "obstacles", type: "fill", source: "obstacles",
+          paint: { "fill-color": "#6f7780", "fill-opacity": 0.6 },
         });
         map.addSource("buildings", { type: "geojson", data: empty });
         // Standardised prism height; flat top (no modelled roof).
         map.addLayer({
           id: "buildings-fill", type: "fill-extrusion", source: "buildings",
           paint: {
-            "fill-extrusion-color": "#9aa3ad",
+            "fill-extrusion-color": ["coalesce", ["get", "colour"], "#9aa3ad"],
             "fill-extrusion-height": ["coalesce", ["get", "height"], 3],
             "fill-extrusion-base": 0,
             "fill-extrusion-opacity": 0.88,
@@ -756,25 +864,35 @@
           paint: {
             "circle-radius": [
               "interpolate", ["linear"], ["zoom"],
-              8, ["case", ["==", ["get", "official"], 1], 4, 3],
-              14, ["case", ["==", ["get", "official"], 1], 6, 4.5],
-              17, ["case", ["==", ["get", "official"], 1], 8, 6],
+              8, ["case", ["==", ["get", "official"], 1], 5, 4],
+              14, ["case", ["==", ["get", "official"], 1], 7, 5.5],
+              17, ["case", ["==", ["get", "official"], 1], 9, 7],
             ],
-            "circle-color": ["case", ["==", ["get", "official"], 1], "#ff2222", "#ffaa00"],
-            "circle-stroke-width": 1,
+            // Sites outside the time window stay on the map, greyed out.
+            "circle-color": [
+              "case",
+              ["==", ["get", "usable"], 0], "#777777",
+              ["==", ["get", "active"], 0], "#5a5a5a",
+              ["==", ["get", "official"], 1], "#ff2222",
+              "#ffaa00",
+            ],
+            "circle-stroke-width": ["case", ["==", ["get", "village"], 1], 2, 1],
             "circle-stroke-color": "#ffffff",
+            "circle-opacity": ["case", ["==", ["get", "active"], 0], 0.6, 1],
           },
         });
         map.addLayer({
           id: "sites-label", type: "symbol", source: "sites",
           layout: {
-            "text-field": ["get", "name"],
+            "text-field": ["get", "label"],
+            "text-font": LABEL_FONT,
             "text-size": 11,
             "text-offset": [0, 1.2],
             "text-anchor": "top",
+            "text-optional": true,
           },
           paint: {
-            "text-color": "#ffffff",
+            "text-color": ["case", ["==", ["get", "active"], 0], "#9a9a9a", "#ffffff"],
             "text-halo-color": "#000000",
             "text-halo-width": 1.2,
           },
@@ -786,15 +904,16 @@
             // ODs stay clearly larger than agents, smaller than site markers.
             "circle-radius": [
               "interpolate", ["linear"], ["zoom"],
-              8, ["+", 2.2, ["*", 0.6, ["coalesce", ["get", "weight"], 1]]],
-              14, ["+", 3.2, ["*", 0.8, ["coalesce", ["get", "weight"], 1]]],
-              17, ["+", 4.5, ["*", 1.0, ["coalesce", ["get", "weight"], 1]]],
+              8, ["+", 2.2, ["*", 1.5, ["coalesce", ["get", "weight"], 1]]],
+              14, ["+", 3.2, ["*", 2.5, ["coalesce", ["get", "weight"], 1]]],
+              17, ["+", 4.5, ["*", 3.5, ["coalesce", ["get", "weight"], 1]]],
             ],
             "circle-color": [
               "case",
-              ["==", ["get", "custom"], 1], "#00ff66",
+              ["==", ["get", "active"], 0], "#5a5a5a",
               ["==", ["get", "kind"], "water"], "#44aaff",
               ["==", ["get", "kind"], "house"], "#ffcc00",
+              ["==", ["get", "kind"], "destination"], "#00ff66",
               "#ff0000",
             ],
             "circle-stroke-width": 1,
@@ -805,9 +924,11 @@
           id: "ods-label", type: "symbol", source: "ods",
           layout: {
             "text-field": ["get", "name"],
+            "text-font": LABEL_FONT,
             "text-size": 10,
             "text-offset": [0, 1.1],
             "text-anchor": "top",
+            "text-optional": true,
           },
           paint: { "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1 },
         });
@@ -818,14 +939,16 @@
             // Keep walkers as pinpricks next to buildings and OD discs.
             "circle-radius": [
               "interpolate", ["linear"], ["zoom"],
-              8, 0.8,
-              12, 1.2,
-              15, 1.8,
-              17, 2.4,
+              8, 1.2,
+              12, 1.6,
+              15, 2.2,
+              17, 2.8,
             ],
             "circle-color": "#ffffff",
-            "circle-stroke-width": 0.6,
-            "circle-stroke-color": "#cc0000",
+            "circle-stroke-width": 0.8,
+            "circle-stroke-color": [
+              "match", ["get", "group"], 0, GROUP_COLOURS[0], 1, GROUP_COLOURS[1], 2, GROUP_COLOURS[2], "#cc0000",
+            ],
             "circle-opacity": 0.9,
           },
         });
@@ -842,9 +965,10 @@
         map.addSource("iso", { type: "geojson", data: empty });
         map.addLayer({
           id: "iso", type: "fill", source: "iso",
-          paint: { "fill-color": "#ffffff", "fill-opacity": 0.12 },
+          paint: { "fill-color": "#ffffff", "fill-opacity": 0.22, "fill-outline-color": "#ffffff" },
         });
         map.on("click", onMapClick);
+        state.mapReady = true;
         applySceneToMap();
         updateMapInteraction();
       } catch (error) {
@@ -855,86 +979,110 @@
   }
 
   function applySceneToMap() {
-    if (!map || !state.scene) return;
-    const bounds = state.scene.bounds;
-    if (map.getSource("density")) {
-      map.getSource("density").setCoordinates([
-        [bounds.west, bounds.north],
-        [bounds.east, bounds.north],
-        [bounds.east, bounds.south],
-        [bounds.west, bounds.south],
-      ]);
-    }
-    if (state.scene.center) {
-      map.easeTo({
-        center: state.scene.center,
-        zoom: state.scene.zoom || (state.scale === "cluster" ? 9.5 : 16),
-        duration: 600,
-      });
-    }
+    const desc = state.desc;
+    if (!map || !state.mapReady || !desc) return;
+    map.getSource("density").setCoordinates(desc.corners);
+    map.easeTo({
+      center: desc.center,
+      zoom: desc.zoom || (desc.scale === "cluster" ? 9.5 : 16),
+      duration: 600,
+    });
     syncBuildings();
     syncSites();
     syncOds();
-    syncLinks();
+    syncRivers();
     syncTrack();
     paint();
   }
 
   function fillSceneControls() {
+    const desc = state.desc;
     const season = document.getElementById("season");
+    const meta = state.meta || {};
+    const keep = season.value || desc.season;
     season.innerHTML = "";
-    (state.scene.seasons || []).forEach(function (item) {
+    (meta.seasons || []).forEach(function (item) {
       const option = document.createElement("option");
       option.value = item.id;
       option.textContent = item.name;
-      if (item.id === "dry") option.selected = true;
+      if (item.id === keep) option.selected = true;
       season.appendChild(option);
     });
     const phases = document.getElementById("phases");
     phases.innerHTML = "";
     state.overrides = {};
-    (state.scene.phases || []).forEach(function (phase) {
+    (desc.phases || []).forEach(function (phase) {
       const label = document.createElement("label");
       label.className = "row check";
-      label.innerHTML = "<input type='checkbox' value='" + phase.id + "' checked> "
-        + phase.name + " (" + phase.start_bc + "–" + phase.end_bc + ")";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = phase.id;
+      box.checked = phase.active;
+      label.appendChild(box);
+      label.appendChild(document.createTextNode(
+        " " + phase.name + " (" + phase.start_bc + "–" + phase.end_bc + ")"));
       phases.appendChild(label);
-      label.querySelector("input").addEventListener("change", function (event) {
+      box.addEventListener("change", function (event) {
         state.overrides[phase.id] = event.target.checked;
         sendToggles();
       });
     });
-    document.getElementById("scale-cluster").classList.toggle("active", state.scale === "cluster");
-    document.getElementById("scale-village").classList.toggle("active", state.scale === "village");
+    phases.parentNode.hidden = !(desc.phases || []).length;
+    document.getElementById("agents").value = String(desc.num_agents);
+    document.getElementById("agents-out").textContent = String(desc.num_agents);
+    document.getElementById("scale-cluster").classList.toggle("active", desc.scale === "cluster");
+    document.getElementById("site").value = desc.scale === "cluster" ? "" : desc.id;
+    document.getElementById("blurb").textContent = t("packed");
   }
 
-  function loadScene(scale) {
-    const scene = state.scenes[scale];
-    if (!scene) {
-      setStatus("scene pack missing — run python -m pedsim pack");
+  function sceneRow(id) {
+    const scenes = (state.index && state.index.scenes) || [];
+    for (let i = 0; i < scenes.length; i++) if (scenes[i].id === id) return scenes[i];
+    return null;
+  }
+
+  function packUrl(file) {
+    return PACK + file + "?v=" + state.index.build;
+  }
+
+  function loadScene(id) {
+    const row = sceneRow(id);
+    if (!row) {
+      setStatus(t("packMissing"));
       return;
     }
-    state.scale = scale;
-    state.scene = scene;
-    state.playing = false;
-    if (state.timer) clearTimeout(state.timer);
-    stopDisplayLoop();
-    state.agentFrom = [];
-    state.agentTo = [];
-    state.agentShown = [];
-    // Village / settlement packs carry denser frames; cluster stays coarser.
-    if (scale === "village") {
-      state.playStepMs = 320;
-      state.lerpMs = 320;
-    } else {
-      state.playStepMs = 420;
-      state.lerpMs = 420;
-    }
-    fillSceneControls();
+    pause();
+    state.sceneId = id;
+    state.agentFrom = new Map();
+    state.agentTo = new Map();
+    state.stepMs = 0;
+    state.template = null;
+    state.playStepMs = row.scale === "village" ? 200 : 300;
+    setStatus(t("sceneLoading") + " " + row.label);
     ensureMap();
-    applySceneToMap();
-    worker.postMessage({ type: "loadScene", scene: scene });
-    sendToggles();
+    Promise.all([
+      fetch(packUrl(row.file)).then(function (r) {
+        if (!r.ok) throw new Error(row.file);
+        return r.json();
+      }),
+      all("saves").catch(function () { return []; }),
+    ]).then(function (found) {
+      const meta = found[0];
+      const saved = (found[1] || []).filter(function (item) { return item.id === id; })[0];
+      state.meta = meta;
+      // Draw the packed description at once; the engine's own follows.
+      state.desc = null;
+      applyDescribe(meta.display);
+      const toggles = currentToggles();
+      toggles.agents = state.low ? Math.min(meta.display.num_agents, 80) : meta.display.num_agents;
+      worker.postMessage({
+        type: "loadScene", meta: meta, blobUrl: packUrl(row.blob),
+        geometry: saved && state.autosave ? saved.geometry : null,
+        toggles: toggles,
+      });
+    }).catch(function (error) {
+      setStatus(t("packMissing") + " (" + (error && error.message) + ")");
+    });
     paintToolbar();
   }
 
@@ -943,30 +1091,36 @@
     state.playing = true;
     paintToolbar();
     setStatus(t("playing"));
-    const stepMs = state.low ? state.playStepMsLow : state.playStepMs;
-    state.lerpMs = stepMs;
     const tick = function () {
       if (!state.playing) return;
-      worker.postMessage({ type: "step", n: 1 });
-      state.timer = setTimeout(tick, stepMs);
+      // Never queue steps the engine has not answered: a slow phone would fall
+      // further and further behind.
+      if (!state.awaiting) {
+        state.awaiting = true;
+        worker.postMessage({ type: "step", n: state.low ? 1 : state.stepsPerTick });
+      }
+      state.timer = setTimeout(tick, state.low ? state.playStepMs * 2 : state.playStepMs);
     };
     tick();
     startDisplayLoop();
   }
 
   function pause() {
+    const was = state.playing;
     state.playing = false;
     if (state.timer) clearTimeout(state.timer);
     stopDisplayLoop();
-    if (state.agentTo.length) syncAgents(state.agentTo);
+    if (state.agentTo && state.agentTo.size) lerpAgents(performance.now() + 1e6);
     paintToolbar();
-    setStatus(t("paused"));
+    if (was) setStatus(t("paused"));
   }
 
   function gpxText(points, name) {
     const rows = points.map(function (point) {
       const time = point.t ? "<time>" + point.t + "</time>" : "";
-      return "<trkpt lat=\"" + point.lat + "\" lon=\"" + point.lon + "\">" + time + "</trkpt>";
+      const ele = point.alt != null ? "<ele>" + point.alt + "</ele>" : "";
+      const acc = point.acc != null ? "<hdop>" + (point.acc / 5).toFixed(1) + "</hdop>" : "";
+      return "<trkpt lat=\"" + point.lat + "\" lon=\"" + point.lon + "\">" + ele + time + acc + "</trkpt>";
     }).join("");
     return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
       + "<gpx version=\"1.1\" creator=\"pedsim\"><trk><name>" + name
@@ -981,16 +1135,27 @@
     setTimeout(function () { URL.revokeObjectURL(link.href); }, 1000);
   }
 
-  function addTrackPoint(lat, lon, source) {
-    state.track.points.push({
-      lat: lat,
-      lon: lon,
-      t: new Date().toISOString(),
-      source: source || "map",
-    });
+  function addTrackPoint(lat, lon, source, extra) {
+    const point = { lat: lat, lon: lon, t: new Date().toISOString(), source: source || "map" };
+    if (extra && extra.accuracy != null) point.acc = Math.round(extra.accuracy * 10) / 10;
+    if (extra && extra.altitude != null) point.alt = Math.round(extra.altitude * 10) / 10;
+    state.track.points.push(point);
     put("tracks", state.track);
     syncTrack();
-    setStatus(t("recorded") + " (" + state.track.points.length + ")");
+    setStatus(t("recorded") + " (" + state.track.points.length + ")"
+      + (point.acc != null ? " ±" + point.acc + " m" : ""));
+  }
+
+  let wakeLock = null;
+  function holdScreen(on) {
+    // The browser stops GPS when the screen sleeps, so keep it awake while recording.
+    if (!navigator.wakeLock) return;
+    if (on) {
+      navigator.wakeLock.request("screen").then(function (lock) { wakeLock = lock; }).catch(function () {});
+    } else if (wakeLock) {
+      wakeLock.release().catch(function () {});
+      wakeLock = null;
+    }
   }
 
   function startRecord() {
@@ -1003,8 +1168,9 @@
       setStatus(t("noGeo"));
       return;
     }
+    holdScreen(true);
     state.watch = navigator.geolocation.watchPosition(function (pos) {
-      addTrackPoint(pos.coords.latitude, pos.coords.longitude, "gps");
+      addTrackPoint(pos.coords.latitude, pos.coords.longitude, "gps", pos.coords);
     }, function () {
       setStatus(t("noGeo"));
     }, {
@@ -1020,24 +1186,22 @@
       navigator.geolocation.clearWatch(state.watch);
     }
     state.watch = null;
+    holdScreen(false);
     paintToolbar();
     updateMapInteraction();
     setStatus(t("recordStop"));
   }
 
-  function nearestCustomOd(lngLat) {
-    let best = null;
-    let bestDist = Infinity;
-    state.customOds.forEach(function (od, index) {
-      const dx = od.coordinates[0] - lngLat.lng;
-      const dy = od.coordinates[1] - lngLat.lat;
-      const dist = dx * dx + dy * dy;
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = index;
-      }
-    });
-    return bestDist < 0.0004 ? best : -1;
+  function edit(name, payload) {
+    if (state.engine === "failed") {
+      setStatus(t("engineOff"));
+      return;
+    }
+    // A wall edit re-solves every route, which takes a while on a phone.
+    if (name === "addBuilding" || name === "deleteBuilding" || name === "applyGeometry" || name === "reset") {
+      setStatus(t("working"));
+    }
+    worker.postMessage({ type: "command", name: name, payload: payload });
   }
 
   function finishTemplate(doorLngLat) {
@@ -1060,43 +1224,23 @@
       }
       ring = rectRing(draft.a, draft.b);
     }
-    const door = [doorLngLat.lng, doorLngLat.lat];
-    const entrance = entranceFromDoor(ring, door);
-    const building = {
-      id: "b-" + Date.now(),
-      name: draft.shape + " " + (state.customBuildings.length + 1),
-      shape: draft.shape,
-      function: "domestic",
-      height: 3,
-      ring: ring,
-      door: door,
-      scale: state.scale,
-      custom: true,
-    };
-    const od = {
-      id: "od-door-" + Date.now(),
-      name: "entrance " + building.name,
-      kind: "house",
-      coordinates: entrance,
-      custom: true,
-      weight: 1,
-      scale: state.scale,
-      tags: ["entrance", "door", draft.shape],
-      building_id: building.id,
-    };
-    state.customBuildings.push(building);
-    state.customOds.push(od);
-    put("buildings", building);
-    put("ods", od);
+    const door = entranceFromDoor(ring, [doorLngLat.lng, doorLngLat.lat]);
+    edit("addBuilding", { ring: ring, door: door, function: "domestic", height: 3 });
     state.template = { shape: draft.shape };
-    syncBuildings();
-    syncOds();
-    setStatus(t("bdAdded") + ": " + building.name);
+    setStatus(t("bdAdded"));
     paintToolbar();
+  }
+
+  function siteAt(point) {
+    if (!map.getLayer("sites")) return null;
+    const hits = map.queryRenderedFeatures(
+      [[point.x - 10, point.y - 10], [point.x + 10, point.y + 10]], { layers: ["sites"] });
+    return hits.length ? hits[0].properties.name : null;
   }
 
   function onMapClick(event) {
     const lngLat = event.lngLat;
+    const where = { lon: lngLat.lng, lat: lngLat.lat };
     if (state.recording) {
       addTrackPoint(lngLat.lat, lngLat.lng, "map");
       return;
@@ -1116,54 +1260,45 @@
       finishTemplate(lngLat);
       return;
     }
+    if (state.mode === "bdDelete") {
+      edit("deleteBuilding", where);
+      return;
+    }
     if (state.mode === "odAdd") {
-      const od = {
-        id: "od-" + Date.now(),
-        name: "OD " + (state.customOds.length + 1),
-        kind: "destination",
-        coordinates: [lngLat.lng, lngLat.lat],
-        custom: true,
-        weight: state.odWeight,
-        scale: state.scale,
-      };
-      state.customOds.push(od);
-      put("ods", od);
-      syncOds();
-      setStatus(t("odAdded") + ": " + od.name);
+      edit("addOd", { lon: where.lon, lat: where.lat, weight: 1, kind: "destination" });
+      setStatus(t("odAdded"));
       return;
     }
     if (state.mode === "odDelete") {
-      const index = nearestCustomOd(lngLat);
-      if (index < 0) return;
-      const removed = state.customOds.splice(index, 1)[0];
-      db().then(function (base) {
-        const tx = base.transaction("ods", "readwrite");
-        tx.objectStore("ods").delete(removed.id);
-      });
-      syncOds();
+      edit("deleteOd", where);
       setStatus(t("odDeleted"));
       return;
     }
     if (state.mode === "odWeight") {
-      const index = nearestCustomOd(lngLat);
-      if (index < 0) return;
-      state.customOds[index].weight = Math.min(5, (state.customOds[index].weight || 1) + 0.5);
-      put("ods", state.customOds[index]);
-      syncOds();
-      setStatus("+/- " + state.customOds[index].name + " → " + state.customOds[index].weight);
+      edit("weightOd", where);
       return;
     }
-    if (state.showIso) syncIso([lngLat.lng, lngLat.lat]);
+    if (state.showIso) {
+      edit("isovist", where);
+      return;
+    }
+    if (state.desc && state.desc.scale === "cluster") {
+      const name = siteAt(event.point);
+      const row = name && villageFor(name);
+      if (row) loadScene(row.id);
+      else if (name) setStatus(name + ": " + t("noVillage"));
+    }
   }
 
   function onTool(id) {
     if (id === "path" || id === "facade" || id === "facadeO" || id === "traces" || id === "tracesO") {
       state.analysis = id;
-      paint();
+      sendToggles();
       paintToolbar();
       return;
     }
-    if (id === "odAdd" || id === "odDelete" || id === "odWeight" || id === "bdCircle" || id === "bdRect") {
+    if (id === "odAdd" || id === "odDelete" || id === "odWeight"
+        || id === "bdCircle" || id === "bdRect" || id === "bdDelete") {
       state.mode = state.mode === id ? null : id;
       state.template = null;
       paintToolbar();
@@ -1171,21 +1306,26 @@
       if (state.mode === "odAdd") setStatus(t("odMode"));
       if (state.mode === "bdCircle") setStatus(t("bdCircleStart"));
       if (state.mode === "bdRect") setStatus(t("bdRectStart"));
+      if (state.mode === "bdDelete") setStatus(t("tipBdDelete"));
       return;
     }
     if (id === "odSave") {
-      Promise.all(state.customOds.map(function (od) { return put("ods", od); })).then(function () {
-        setStatus(t("saved") + " (" + state.customOds.length + " OD)");
-      });
+      worker.postMessage({ type: "export", purpose: "save" });
+      return;
+    }
+    if (id === "export") {
+      worker.postMessage({ type: "export", purpose: "download" });
       return;
     }
     if (id === "odLoad") {
-      all("ods").then(function (rows) {
-        state.customOds = rows.filter(function (od) {
-          return !od.scale || od.scale === state.scale;
-        });
-        syncOds();
-        setStatus(t("saved") + " · " + state.customOds.length + " OD");
+      all("saves").then(function (rows) {
+        const saved = rows.filter(function (item) { return item.id === state.sceneId; })[0];
+        if (!saved) {
+          setStatus(t("noSave"));
+          return;
+        }
+        edit("applyGeometry", { geometry: saved.geometry });
+        setStatus(t("opened") + " " + saved.saved.slice(0, 16).replace("T", " "));
       });
       return;
     }
@@ -1228,37 +1368,112 @@
     }
     if (id === "iso") {
       state.showIso = !state.showIso;
-      if (!state.showIso) syncIso(null);
+      if (!state.showIso) {
+        syncIso(null);
+        worker.postMessage({ type: "setToggles", toggles: { isovist: false } });
+      } else {
+        setStatus(t("isoMode"));
+      }
       paintToolbar();
       return;
     }
     if (id === "reset") {
+      // X: back to the scene as packed. Edits saved with "save" stay stored.
       pause();
-      worker.postMessage({ type: "reset" });
       if (state.recording) stopRecord();
-      state.customOds = [];
-      state.customBuildings = [];
       state.template = null;
       state.mode = null;
-      state.track = { id: "t" + Date.now(), points: [], name: "field" };
-      clearStore("ods");
-      clearStore("buildings");
-      clearStore("tracks");
-      syncOds();
-      syncBuildings();
-      syncTrack();
+      state.showIso = false;
+      syncIso(null);
+      db().then(function (base) {
+        base.transaction("saves", "readwrite").objectStore("saves").delete(state.sceneId);
+      });
+      edit("reset", {});
       setStatus(t("reset"));
       paintToolbar();
       updateMapInteraction();
     }
   }
 
+  // ------------------------------------------------------------ offline pack
+  function packFiles() {
+    const files = ["index.json"];
+    const index = state.index;
+    if (index.basemap && index.basemap.file) files.push(index.basemap.file + "?v=" + index.build);
+    index.scenes.forEach(function (row) {
+      files.push(row.file + "?v=" + index.build);
+      files.push(row.blob + "?v=" + index.build);
+    });
+    return files.map(function (name) { return PACK + name; });
+  }
+
+  function offlineState() {
+    if (!window.caches || !state.index) return Promise.resolve(null);
+    const urls = packFiles().concat(ENGINE_FILES);
+    return caches.open(CACHE).then(function (cache) {
+      return Promise.all(urls.map(function (url) { return cache.match(url); }));
+    }).then(function (hits) {
+      return { have: hits.filter(Boolean).length, total: urls.length };
+    });
+  }
+
+  function showOffline() {
+    offlineState().then(function (info) {
+      const node = document.getElementById("offline-state");
+      if (!info) {
+        node.textContent = t("offlineNoCache");
+        return;
+      }
+      node.textContent = info.have >= info.total
+        ? t("offlineReady") + " (" + info.total + ")"
+        : t("offlinePartial") + " " + info.have + " / " + info.total;
+    });
+  }
+
+  function downloadAll() {
+    if (!window.caches) {
+      setStatus(t("offlineNoCache"));
+      return;
+    }
+    const urls = packFiles().concat(ENGINE_FILES);
+    const button = document.getElementById("offline-get");
+    button.disabled = true;
+    let done = 0;
+    let failed = 0;
+    caches.open(CACHE).then(function (cache) {
+      // One at a time: a phone on a hotspot drops parallel 25 MB downloads.
+      return urls.reduce(function (chain, url) {
+        return chain.then(function () {
+          return cache.match(url).then(function (hit) {
+            if (hit) return null;
+            return fetch(url).then(function (response) {
+              if (!response.ok) throw new Error(url);
+              return cache.put(url, response);
+            });
+          }).catch(function () { failed += 1; }).then(function () {
+            done += 1;
+            document.getElementById("offline-state").textContent =
+              t("offlinePartial") + " " + done + " / " + urls.length;
+          });
+        });
+      }, Promise.resolve());
+    }).then(function () {
+      button.disabled = false;
+      if (failed) setStatus(t("offlineFailed") + " (" + failed + ")");
+      showOffline();
+    });
+  }
+
   document.getElementById("lang").addEventListener("change", function (event) {
     state.lang = event.target.value;
     applyLanguage();
+    if (state.desc) document.getElementById("blurb").textContent = t("packed");
+    showOffline();
   });
   document.getElementById("scale-cluster").addEventListener("click", function () { loadScene("cluster"); });
-  document.getElementById("scale-village").addEventListener("click", function () { loadScene("village"); });
+  document.getElementById("site").addEventListener("change", function (event) {
+    loadScene(event.target.value || "cluster");
+  });
   ["chrono", "start", "end", "season", "opacity", "log", "cutoff"].forEach(function (id) {
     const notify = function () {
       if (id === "start" || id === "end") chronologyWindow();
@@ -1268,12 +1483,25 @@
     document.getElementById(id).addEventListener("input", notify);
     document.getElementById(id).addEventListener("change", notify);
   });
+  document.getElementById("agents").addEventListener("input", function (event) {
+    document.getElementById("agents-out").textContent = event.target.value;
+  });
+  document.getElementById("agents").addEventListener("change", sendToggles);
+  document.getElementById("speed").addEventListener("input", function (event) {
+    state.stepsPerTick = Number(event.target.value);
+    document.getElementById("speed-out").textContent = "×" + event.target.value;
+  });
+  document.getElementById("low").addEventListener("change", function (event) {
+    state.low = event.target.checked;
+    if (state.playing) { pause(); play(); }
+  });
   document.getElementById("tilt").addEventListener("input", function (event) {
     if (map) map.setPitch(Number(event.target.value));
   });
   document.getElementById("basemap").addEventListener("change", function (event) {
     setBasemap(event.target.value);
   });
+  document.getElementById("offline-get").addEventListener("click", downloadAll);
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) pause();
   });
@@ -1287,21 +1515,34 @@
 
   applyLanguage();
   chronologyWindow();
+  worker.postMessage({ type: "boot" });
+  if (navigator.onLine) {
+    fetch(window.location.origin + "/tiles/streets/0/0/0.png").then(function (response) {
+      state.proxy = response.ok;
+      setNet();
+    }).catch(function () {});
+  }
 
   Promise.all([
-    fetch("packs/goebekli/cluster.json").then(function (r) { return r.ok ? r.json() : null; }),
-    fetch("packs/goebekli/scene.json").then(function (r) { return r.ok ? r.json() : null; }),
-    all("ods"),
-    all("tracks"),
-    all("buildings"),
+    fetch(PACK + "index.json").then(function (r) {
+      if (!r.ok) throw new Error("index");
+      return r.json();
+    }),
+    all("tracks").catch(function () { return []; }),
   ]).then(function (found) {
-    if (found[0]) state.scenes.cluster = found[0];
-    if (found[1]) state.scenes.village = found[1];
-    state.customOds = found[2] || [];
-    if ((found[3] || []).length) state.track = found[3][found[3].length - 1];
-    state.customBuildings = found[4] || [];
-    loadScene(state.scenes.cluster ? "cluster" : "village");
+    state.index = found[0];
+    if ((found[1] || []).length) state.track = found[1][found[1].length - 1];
+    const select = document.getElementById("site");
+    state.index.scenes.filter(function (row) { return row.scale === "village"; }).forEach(function (row) {
+      const option = document.createElement("option");
+      option.value = row.id;
+      option.textContent = row.label + (row.confidence && row.confidence !== "published" ? " (~)" : "");
+      select.appendChild(option);
+    });
+    setNet();
+    showOffline();
+    loadScene(state.index.default || "cluster");
   }).catch(function () {
-    setStatus("scene pack missing — run python -m pedsim pack");
+    setStatus(t("packMissing"));
   });
 }());

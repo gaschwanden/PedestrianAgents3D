@@ -399,45 +399,112 @@ class NavGrid:
         self._cost_fields[key] = cost
         return cost
 
+    # -- plain-list views ---------------------------------------------------
+    # Reading one cell of a numpy array from Python costs far more than the
+    # arithmetic around it. The solvers and the agents' sight-lines read cells
+    # one at a time, so they work on nested lists made once per array. The
+    # values are the same doubles; only the container changes.
+    def walkable_rows(self) -> list:
+        cached = getattr(self, "_walk_rows", None)
+        if cached is None or cached[0] is not self.walkable:
+            cached = (self.walkable, self.walkable.tolist())
+            self._walk_rows = cached
+        return cached[1]
+
+    def cost_rows(self, key: int) -> Optional[list]:
+        arr = self._cost_fields.get(key)
+        if arr is None:
+            return None
+        store = self.__dict__.setdefault("_cost_rows", {})
+        cached = store.get(key)
+        if cached is None or cached[0] is not arr:
+            cached = (arr, arr.tolist())
+            store[key] = cached
+        return cached[1]
+
+    def penalty_rows(self) -> Optional[list]:
+        if self.step_penalty is None:
+            return None
+        cached = getattr(self, "_penalty_rows", None)
+        if cached is None or cached[0] is not self.step_penalty:
+            cached = (self.step_penalty, self.step_penalty.tolist())
+            self._penalty_rows = cached
+        return cached[1]
+
+    def _step_costs(self) -> list:
+        """Cost of the step *into* each cell from each of its 8 neighbours'
+        expansion, as ``[(di, dj, rows)]`` -- the terrain and friction part of
+        Dijkstra, done once for all destinations instead of once per edge."""
+        tc = self.terrain_cost
+        tag = (self.elevation, self.friction, tc.base_speed, tc.slope_factor,
+               tc.slope_offset, tc.impassable_slope, tc.max_ascent_slope,
+               tc.max_descent_slope)
+        cached = getattr(self, "_step_cache", None)
+        if cached is not None and len(cached[0]) == len(tag) and all(
+                (x is y) if isinstance(x, np.ndarray) or x is None else (x == y)
+                for x, y in zip(cached[0], tag)):
+            return cached[1]
+        nx, ny = self.nx, self.ny
+        elev = self.elevation
+        fric = self.friction
+        up = tc.impassable_slope if tc.max_ascent_slope is None else tc.max_ascent_slope
+        down = tc.impassable_slope if tc.max_descent_slope is None else tc.max_descent_slope
+        out = []
+        for di, dj, planar in _NEIGHBORS:
+            horiz = planar * self.gridsize
+            # cells (i, j) whose neighbour (i + di, j + dj) is on the grid
+            i0, i1 = max(0, -di), nx - max(0, di)
+            j0, j1 = max(0, -dj), ny - max(0, dj)
+            here = (slice(i0, i1), slice(j0, j1))
+            there = (slice(i0 + di, i1 + di), slice(j0 + dj, j1 + dj))
+            step = np.full((nx, ny), np.inf, dtype=float)
+            if elev is not None:
+                slope = (elev[here] - elev[there]) / horiz   # walking neighbour -> here
+                with np.errstate(over="ignore", invalid="ignore"):
+                    cost = horiz / (tc.base_speed * np.exp(
+                        -tc.slope_factor * np.abs(slope + tc.slope_offset)))
+                cost[(slope > up) | (-slope > down)] = np.inf
+            else:
+                cost = np.full((i1 - i0, j1 - j0), horiz, dtype=float)
+            if fric is not None:
+                # average the two cells so a crossing costs the same either way
+                with np.errstate(invalid="ignore"):
+                    cost = cost * (0.5 * (fric[here] + fric[there]))
+            step[here] = cost
+            out.append((di, dj, step.tolist()))
+        self._step_cache = (tag, out)
+        return out
+
     def _dijkstra(self, key: int, ox: float, oy: float) -> np.ndarray:
         nx, ny = self.nx, self.ny
         px, py = self._seed_cell(ox, oy)
-        cost = np.full((nx, ny), np.inf, dtype=float)
-        cost[px, py] = 0.0
-        elev = self.elevation
-        fric = self.friction
-        gsize = self.gridsize
-        tc = self.terrain_cost
+        inf = math.inf
+        cost = [[inf] * ny for _ in range(nx)]
+        cost[px][py] = 0.0
+        walk = self.walkable_rows()
+        steps = self._step_costs()
         heap: List[Tuple[float, int, int]] = [(0.0, px, py)]
+        pop, push = heapq.heappop, heapq.heappush
         while heap:
-            c, i, j = heapq.heappop(heap)
-            if c > cost[i, j]:
+            c, i, j = pop(heap)
+            if c > cost[i][j]:
                 continue
-            for di, dj, planar in _NEIGHBORS:
+            for di, dj, rows in steps:
                 ni, nj = i + di, j + dj
                 if not (0 <= ni < nx and 0 <= nj < ny):
                     continue
-                if not self.walkable[ni, nj]:
+                if not walk[ni][nj]:
                     continue
-                horiz = planar * gsize
-                if elev is not None:
-                    dz = elev[i, j] - elev[ni, nj]  # agent walks neighbour -> current
-                    step = tc.step_cost(dz, horiz)
-                else:
-                    step = horiz
-                if not math.isfinite(step):
+                step = rows[i][j]
+                if not step < inf:        # impassable, or undefined (nan)
                     continue
-                if fric is not None:
-                    # average the two cells so a crossing costs the same either way
-                    step *= 0.5 * (fric[i, j] + fric[ni, nj])
-                    if not math.isfinite(step):
-                        continue
                 nc = c + step
-                if nc < cost[ni, nj]:
-                    cost[ni, nj] = nc
-                    heapq.heappush(heap, (nc, ni, nj))
-        self._cost_fields[key] = cost
-        return cost
+                if nc < cost[ni][nj]:
+                    cost[ni][nj] = nc
+                    push(heap, (nc, ni, nj))
+        field = np.array(cost, dtype=float)
+        self._cost_fields[key] = field
+        return field
 
     # --------------------------------------------------------------- occupancy
     def add_occupancy(self, i: int, j: int, amount: float = 1.0) -> None:

@@ -155,7 +155,11 @@ class Agent:
         candidates: list[tuple[int, int]] = []
         weights: list[float] = []
         accumulate = sim.accumulate_visibility
-        penalty = grid.step_penalty
+        # nested lists: same values as the arrays, far cheaper to read per cell
+        penalty = grid.penalty_rows()
+        walk = grid.walkable_rows()
+        rows = grid.cost_rows(self.target)
+        isfinite = math.isfinite
 
         step = sim.radius_divider
         j_angle = angle
@@ -176,15 +180,15 @@ class Agent:
                 # at) -- this feeds the facade-visibility analysis.
                 if accumulate:
                     grid.add_visibility(pixx, pixy, self.group)
-                if not grid.walkable[pixx, pixy]:
+                if not walk[pixx][pixy]:
                     break  # line of sight blocked by a wall
                 if penalty is not None:
-                    acc += penalty[pixx, pixy]
-                d = cost[pixx, pixy]
+                    acc += penalty[pixx][pixy]
+                d = rows[pixx][pixy]
                 # Walking straight here costs the going along the way; only
                 # worth it if the cost saved covers it. With no rough ground
                 # ``acc`` is 0 and this is the original ``d < curr_d`` test.
-                if math.isfinite(d) and d >= 0 and d + acc < curr_d:
+                if isfinite(d) and d >= 0 and d + acc < curr_d:
                     candidates.append((pixx, pixy))
                     weights.append(x * x + y * y)  # favour longer sight-lines
             j_angle += step

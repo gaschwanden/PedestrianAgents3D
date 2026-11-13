@@ -108,7 +108,22 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def serve(host: str = "0.0.0.0", port: int = 8000) -> None:
+def serve(host: str = "0.0.0.0", port: int = 0, cert: str = "", key: str = "") -> None:
+    """Serve ``web/``. ``PORT`` in the environment overrides the default 8000.
+
+    With ``cert`` and ``key`` (PEM files) the server speaks HTTPS. A phone only
+    installs the app for offline use, and only gives it GPS, from an https
+    address; ``localhost`` on the laptop itself is exempt.
+    """
+    port = int(port or os.environ.get("PORT") or 8000)
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"pedsim field client on http://{host}:{port}")
+    scheme = "http"
+    if cert and key:
+        import ssl
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    print(f"pedsim field client on {scheme}://{host}:{port}", flush=True)
     server.serve_forever()

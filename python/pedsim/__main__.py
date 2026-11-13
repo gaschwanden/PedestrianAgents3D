@@ -34,10 +34,15 @@ def main(argv=None) -> int:
     hyp.add_argument("--out", default="runs/hypotheses")
     hyp.add_argument("--seeds", default="1")
 
-    sub.add_parser("serve", help="serve the field client on the local network")
+    srv = sub.add_parser("serve", help="serve the field client on the local network")
+    srv.add_argument("--port", type=int, default=0)
+    srv.add_argument("--cert", default="", help="PEM certificate, for https")
+    srv.add_argument("--key", default="", help="PEM private key, for https")
     pack = sub.add_parser("pack", help="build an offline data pack")
     pack.add_argument("action", nargs="?", default="build")
     pack.add_argument("--area", default="goebekli")
+    pack.add_argument("--save-dir", default="",
+                      help="folder of desktop saves (<site>.geometry.json) to pack")
 
     compare = sub.add_parser("compare", help="compare two phase sets")
     compare.add_argument("--phases", nargs=2, metavar=("A", "B"))
@@ -73,11 +78,12 @@ def main(argv=None) -> int:
         return 0
     if args.cmd == "serve":
         from .serve import serve
-        serve()
+        serve(port=args.port, cert=args.cert, key=args.key)
         return 0
     if args.cmd == "pack":
         from .pack import build_pack
-        print(build_pack(args.area, publish_web=True))
+        print(build_pack(args.area, publish_web=True, save_dir=args.save_dir,
+                         progress=lambda m: print("  " + m, flush=True)))
         return 0
     if args.cmd == "compare":
         print("phase comparison needs a village geometry; see pedsim.phases")

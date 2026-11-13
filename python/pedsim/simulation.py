@@ -76,7 +76,13 @@ class Simulation:
         num_groups: int = 3,
         analysis_mode: int = ANALYSIS_PATHOVERLAP,
         seed: Optional[int] = None,
+        cost_field_provider=None,
     ):
+        #: Optional ``callable(sim) -> {od_index: cost array} | None``. When it
+        #: returns fields they are installed instead of being solved, so a packed
+        #: scene can start on a phone without running Dijkstra. Any OD it leaves
+        #: out is solved as usual.
+        self.cost_field_provider = cost_field_provider
         self.ods: List[Optional[OD]] = list(ods)
         self.buildings: List[Building] = [_to_building(b, "building") for b in (buildings or [])]
         self.obstacles: List[Building] = [_to_building(o, "obstacle", 0.0) for o in (obstacles or [])]
@@ -255,8 +261,15 @@ class Simulation:
 
     def _build_cost_fields(self) -> None:
         self.grid.clear_cost_fields()
+        ready = {}
+        if self.cost_field_provider is not None:
+            ready = self.cost_field_provider(self) or {}
         for k, od in self._active_ods():
-            self.grid.compute_cost_field(k, od.x, od.y, self.rng)
+            field = ready.get(k)
+            if field is not None and field.shape == (self.grid.nx, self.grid.ny):
+                self.grid._cost_fields[k] = field
+            else:
+                self.grid.compute_cost_field(k, od.x, od.y, self.rng)
 
     def recompute_cost_fields(self) -> None:
         self._build_cost_fields()
@@ -448,10 +461,19 @@ class Simulation:
         return [a for a in self.agents if a.active]
 
     # -------------------------------------------------------------------- step
+    #: Scan every walker's vision cone with array operations. ``False`` runs
+    #: the per-agent reference scan instead; both give the same result bit for
+    #: bit (see :mod:`pedsim.vision`).
+    batch_vision = True
+
     def step(self) -> None:
-        for a in self.agents:
-            if a.active:
-                a.vision_scan()
+        if self.batch_vision:
+            from .vision import scan_all
+            scan_all(self)
+        else:
+            for a in self.agents:
+                if a.active:
+                    a.vision_scan()
         for a in self.agents:
             if not a.active:
                 continue
@@ -771,6 +793,11 @@ class Simulation:
         written by :meth:`save_geometry_json`."""
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
+        self.load_geometry_dict(data)
+
+    def load_geometry_dict(self, data: dict) -> None:
+        """Apply a :meth:`geometry_dict` mapping (the field client keeps saves
+        as dicts, not files)."""
         from .phases import Phase, migrate_geometry
         data = migrate_geometry(data)
         if data.get("site_polygon"):

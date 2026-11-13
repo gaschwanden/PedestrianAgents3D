@@ -480,7 +480,7 @@ Travel cost from the stock Tobler solver is in equivalent flat metres when `Terr
 
 ## 17. Implementation status (v1.1)
 
-Package version 0.3.0. Tests live in `python/tests/test_research.py` and `python/tests/test_outputs.py`. The protocol text is `docs/ODD.md`, regenerated with `python -m pedsim.scenario --odd`.
+Package version 0.4.0. Tests live in `python/tests/test_research.py`, `python/tests/test_outputs.py` and `python/tests/test_live.py`. The protocol text is `docs/ODD.md`, regenerated with `python -m pedsim.scenario --odd`.
 
 | Area | What ships |
 |---|---|
@@ -488,11 +488,19 @@ Package version 0.3.0. Tests live in `python/tests/test_research.py` and `python
 | Scenarios and ensembles | `python -m pedsim run`, run records, `python -m pedsim hypotheses` |
 | Network and obsidian | Travel-time and gravity tools, distance-decay fit. Hypothesis runs use the synthetic village unless a geodata scene is requested. `scene: synthetic` is the CI scene. |
 | Calibration and GIS | GPX/TCX/FIT/Strava-zip import, Tobler fit, shapefile, GeoPackage, QGZ, GeoJSON, KML, COG. Example water ODs in `python/data/examples/water_ods.geojson` are schematic, not surveyed. |
-| Field client | `web/` is an installable page with a Java-style red button grid, pitched 3D map, chronology rolling bars, and a **Season** control (dry / normal / spring floods). It plays packed `cluster.json` (settlements + inter-site ODs) and `scene.json` (village / settlement at 2 m cells, with lerped agent playback). Google/Esri satellite is the default online basemap, proxied by `pedsim serve` for WebGL CORS, and never cached by the service worker. OD+ / map-tap destinations and REC (GPS or map-tap track) are live. `python -m pedsim serve` also answers `POST /api/run`. |
+| Field client | `web/` runs the model itself on the device (v0.4, 2026-11-12). pedsim is loaded into the browser with Pyodide and `pedsim.live.LiveEngine` rebuilds each packed scene as a `Simulation`. `pedsim pack` writes the cluster and one 900 m / 3 m village per usable site (terrain, rivers, georeference, solved cost fields), a relief basemap from the DEM, and the engine bundle. Edits (places, buildings, isovist), analysis modes, chronology, season and phases all go through the engine. Saves use the desktop geometry format in both directions. |
 
-The field client does not vendor Pyodide and does not run a second copy of the agent model. It plays `web/packs/goebekli/scene.json`, which `python -m pedsim pack` writes from `pedsim`. Heavier runs go to the laptop hub. These items are specified and only partly built:
+The field client has one agent model: the Python one. A packed scene replays bit for bit like its source scene, and the batched vision scan (`pedsim.vision`) and list-based Dijkstra give the same arrays as the per-agent reference; `tests/test_live.py` holds those equalities. Measured in a desktop browser: cluster 400 walkers about 35 steps/s, village 250 walkers about 40 steps/s. D20-04 is not measured on a phone yet.
 
-- PMTiles and a GLO-90 regional raster are external. `pedsim pack` writes the scene, the config and a note, not a tile archive.
+Decisions added on 2026-11-12: the field version simulates live on the laptop, an iPhone and an iPad; site scale keeps the trip-chain model; the two scales are independent models that share data and tools; every site with a usable coordinate gets a village scene and plans are added as they are supplied.
+
+These items are specified and only partly built:
+
+- Village scenes carry terrain and gates only. No wall plan is imported for any site yet; plans are georeferenced with `pedsim.plans` when the drawings are supplied.
+- Village terrain is the 30 m DEM interpolated to 3 m (`geo.load_dem(interpolate=...)`). Before v0.4 it was sampled as a staircase, which put artificial cliffs every 30 m.
+- A phone needs an https address to install the page and use GPS. `scripts/publish_field.sh` publishes `web/` to GitHub Pages by hand after `pedsim pack`; CI cannot build the pack because the DEM is not in the repository.
+- The service worker is not verified in a real phone browser.
+- Tasks and population classes run in the Python model but have no control in the field page yet. Layer weights, building split and module placement are desktop only.
+- A GLO-90 regional raster is external. The offline basemap is one relief image from the DEM, not a PMTiles street or satellite archive.
 - Strava OAuth, Google tiles, Optuna and a full phase-comparison CLI are not included. `pedsim compare --phases` does not solve a village; it points at `pedsim.phases`.
 - GitHub Pages deploy is not wired. `.github/workflows/pytest.yml` runs the test suite. Serve `web/` with `python -m pedsim serve` or any static host.
-- The on-device budget in D20-04 (200×200 cells, 250 agents) is not measured here. The packed scene is the synthetic village, 40×40 cells.

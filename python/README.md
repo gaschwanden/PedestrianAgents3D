@@ -458,28 +458,78 @@ python -m pedsim.scenario --odd          # rewrite ../docs/ODD.md
 python -m pedsim run data/config/scenario_synthetic.yaml --out ../runs
 python -m pedsim hypotheses list
 python -m pedsim hypotheses run R G --seeds 1
-python -m pedsim pack                    # scene pack, and a copy for web/
+python -m pedsim pack                    # live scene pack + engine bundle into web/
 python -m pedsim serve                   # http://0.0.0.0:8000  field client
 ```
 
-`web/` is the field page. It still does **not** run a second simulator: it plays
-packs that `pedsim pack` writes (`cluster.json` for the Taş Tepeler settlements
-and inter-site ODs, `scene.json` for the village / settlement at **2 m** cells).
-Playback lerps agent positions between packed steps so walkers move slowly and
-smoothly rather than jumping cell-to-cell. Village packs run long enough for
-agents to finish origin→destination trips on the 2 m grid. The chrome copies the Java
-tool: a red button grid (P / F / OD+ / OD- / REC / …; hover for function tips), a tilted 3D map, and
-Shift-drag pitch. Chronology uses rolling bars; **Season** is dry / normal /
-spring floods. Google satellite or Esri imagery is the default online basemap: `pedsim serve`
-proxies those tiles (they have no WebGL CORS headers of their own) and the
-service worker never caches them. **OD+** places destinations by tapping the
-map; **REC** records a track from GPS or map taps when GPS is blocked.
-**Ask the laptop** (`HUB`) posts a short ensemble to `pedsim serve`.
+### Field client (`web/`): the model itself, offline
+
+`web/` is the field page for a laptop, phone or tablet. It runs **pedsim
+itself** on the device: the Python package is loaded into the browser
+([Pyodide](https://pyodide.org), bundled in `web/vendor/pyodide`), and
+`pedsim.live.LiveEngine` rebuilds each scene as a real `Simulation` and steps
+it. There is no second agent model and nothing is played back.
+
+`python -m pedsim pack` writes what the device needs into `web/`:
+
+| File | What it is |
+| --- | --- |
+| `packs/goebekli/cluster.json` + `.bin` | the Taş Tepeler cluster: terrain on the 250 m grid, rivers, sites, and the solved routes for all three seasons |
+| `packs/goebekli/village-<site>.json` + `.bin` | one 900 m village per site with a usable coordinate, at 3 m cells, with its solved routes |
+| `packs/goebekli/basemap.jpg` | shaded relief rendered from the Copernicus DEM, the offline basemap |
+| `vendor/pedsim.zip` | this package and `data/config`, for the in-browser engine |
+
+A packed scene replays **bit for bit** like the scene it was packed from
+(`tests/test_live.py`). A phone cannot read GeoTIFFs or run `pyproj`, so the
+laptop resolves terrain and the georeference once and the pack carries the
+result. Routes (cost fields) are packed too, so a scene opens in well under a
+second; they are re-solved on the device only after an edit that moves a wall
+or a place.
+
+The pack and the browser runtime are build output and are not in the source
+history. On a fresh clone run `bash ../scripts/fetch_pyodide.sh` once.
+
+```bash
+python -m pedsim pack                         # all sites
+python -m pedsim pack --save-dir ../out       # include scenes saved in the desktop viewer
+python -m pedsim serve                        # http://localhost:8000
+```
+
+In the page: **Cluster** or a site from the list (or tap a site marker).
+**▶ / ❚❚** run and pause. **P / F / Fx / TR / TRx** are the analysis modes of the
+Java tool. **OD+ / OD− / +/−** add, remove and re-weight places; **B○ / B▭ / B−**
+add and remove buildings (centre/rim or corner/corner, then the door; an
+entrance is placed outside it); **Iso** shows the isovist from a tapped point.
+Every edit goes to the engine and re-routes the walkers. **save / open** keep a
+scene's edits on the device, **file** exports them as `<scene>.geometry.json`,
+which the desktop viewer and `pedsim pack --save-dir` read. **X** returns the
+scene to the pack. Chronology, the time window, the season and the phase boxes
+are the same switches as the desktop Research tab. **REC** records a GPS track
+(it keeps the screen awake, and stores accuracy and altitude per fix); **GPX**
+exports it.
+
+**Offline.** *Download all* stores the whole pack and the engine on the device
+(about 110 MB). The basemap then switches to *Relief (offline)*; Google, Esri
+and OpenStreetMap tiles are online-only because their terms forbid storing
+them. A phone or tablet only allows offline storage and GPS on an **https**
+address (`localhost` on the laptop itself is exempt), so for an iPhone or iPad
+either publish `web/` to a static https host or serve it from the laptop with a
+certificate the device trusts (`python -m pedsim serve --cert cert.pem --key key.pem`).
+`scripts/publish_field.sh` pushes `web/` to the repository's `gh-pages` branch as
+one fresh commit, which GitHub Pages serves at
+<https://gaschwanden.github.io/PedestrianAgents3D/>. That page is public. On a
+static host only the relief basemap is offered, because satellite and street
+tiles need the laptop's tile proxy.
+
+**What is not in a village scene yet.** Villages are real terrain with six
+perimeter gates and a centre. Walls and buildings come from a georeferenced
+plan (`pedsim.plans`) or are drawn in; none ship. Terrain is the 30 m DEM,
+interpolated to the 3 m grid, so it shows the hill, not the architecture.
 
 The desktop Edit tab can box-select buildings (two clicks) and assign them to a
 phase. **B circle** / **B rect** place a round or rectangular house in three
 taps (centre/rim or corner/corner, then the door); an entrance OD is created
-outside the door. The field client has the same tools as **B○** / **B▭**.
+outside the door.
 With a regional scene loaded, Escape goes up one level and the breadcrumb reads
 `Region › Cluster › Göbeklitepe`.
 
