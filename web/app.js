@@ -30,7 +30,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v17";
+  const CACHE = "pedsim-field-v18";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -85,8 +85,12 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=17");
+  const worker = new Worker("worker.js?v=18");
   const canvas = document.createElement("canvas");
+  // walls read from a plan (one pixel per cell, phase colours)
+  const wallCanvas = document.createElement("canvas");
+  wallCanvas.width = 1;
+  wallCanvas.height = 1;
   let map = null;
 
   function t(key) {
@@ -401,6 +405,17 @@
     ctx.putImageData(image, 0, 0);
     map.setPaintProperty("density", "raster-opacity", Number(document.getElementById("opacity").value));
     map.triggerRepaint();
+  }
+
+  function paintWalls(frame) {
+    const nx = frame.walls ? frame.walls_nx : 1;
+    const ny = frame.walls ? frame.walls_ny : 1;
+    wallCanvas.width = nx;
+    wallCanvas.height = ny;
+    const ctx = wallCanvas.getContext("2d");
+    ctx.clearRect(0, 0, nx, ny);
+    if (frame.walls) ctx.putImageData(new ImageData(frame.walls, nx, ny), 0, 0);
+    if (map) map.triggerRepaint();
   }
 
   function featurePoint(coords, props) {
@@ -774,7 +789,10 @@
       const per = message.ms / message.steps;
       state.stepMs = state.stepMs ? state.stepMs * 0.7 + per * 0.3 : per;
     }
-    if (message.describe) applyDescribe(message.describe);
+    if (message.describe) {
+      applyDescribe(message.describe);
+      paintWalls(message);      // walls change only when the scene does
+    }
     state.frame = message;
     paint();
     state.agentFrom = state.agentTo;
@@ -823,7 +841,9 @@
     esri: {
       tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
       attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
-      maxzoom: 19,
+      // level 19 is a "map data not yet available" placeholder out here;
+      // 18 is the deepest real imagery, and the map stretches it beyond that
+      maxzoom: 18,
     },
   };
 
@@ -964,6 +984,14 @@
             "raster-resampling": "nearest",
             "raster-fade-duration": 0,
           },
+        });
+        map.addSource("walls", {
+          type: "canvas", canvas: wallCanvas, animate: true,
+          coordinates: [[38.4, 37.5], [39.3, 37.5], [39.3, 36.8], [38.4, 36.8]],
+        });
+        map.addLayer({
+          id: "walls", type: "raster", source: "walls",
+          paint: { "raster-opacity": 0.92, "raster-resampling": "nearest", "raster-fade-duration": 0 },
         });
         map.addSource("rivers", { type: "geojson", data: empty });
         map.addLayer({
@@ -1187,6 +1215,7 @@
     const desc = state.desc;
     if (!map || !state.mapReady || !desc) return;
     map.getSource("density").setCoordinates(desc.corners);
+    map.getSource("walls").setCoordinates(desc.corners);
     map.easeTo({
       center: desc.center,
       zoom: desc.zoom || (desc.scale === "cluster" ? 9.5 : 16),
@@ -1287,6 +1316,7 @@
       state.meta = meta;
       // Draw the packed description at once; the engine's own follows.
       state.desc = null;
+      paintWalls({});
       applyDescribe(meta.display);
       const toggles = currentToggles();
       toggles.agents = state.low ? Math.min(meta.display.num_agents, 80) : meta.display.num_agents;

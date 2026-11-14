@@ -487,6 +487,33 @@ def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
         row["confidence"] = conf
         index["scenes"].append(row)
 
+    from . import gobekli_plan
+
+    if gobekli_plan.available() and (not sites_filter or "Göbeklitepe" in sites_filter):
+        say("Göbeklitepe phase plan")
+        sim = gobekli_plan.plan_scene(progress=progress)
+        sim.pack_seed = 5
+        grid = sim.grid
+        bounds = (grid.min_x, grid.min_y, grid.max_x, grid.max_y)
+        frame = live.BilinearFrame.from_frame(sim.frame, bounds, nodes=2)
+        note = ("Walls and pillars read from the 2024 building-phase plan (" + gobekli_plan.CITATION
+                + ") Position: " + sim.position_quality + ". Phase dates are assumptions; "
+                "a wall is taken to stand from its building phase onward; unphased "
+                "stonework is not included. " + " ".join(sim.entrance_notes))
+        row = _write_live(
+            root, sim, "plan-gobeklitepe", "Göbeklitepe · main excavation (plan)", "village",
+            frame, site="Göbeklitepe", zoom=19.0,
+            sites=[r for r in rows if r["name"] == "Göbeklitepe"], note=note,
+        )
+        row["confidence"] = "published"
+        row["plan"] = True
+        index["scenes"].append(row)
+    else:
+        index["skipped"].append({
+            "site": "Göbeklitepe plan",
+            "reason": "plan image not found at data/raw/" + gobekli_plan.PLAN_FILE,
+        })
+
     with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as fh:
         json.dump(index, fh, indent=1, ensure_ascii=False)
     return index

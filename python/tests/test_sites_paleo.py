@@ -52,17 +52,25 @@ def test_unlocated_sites_have_no_coordinate():
 
 def test_known_data_gaps_are_flagged():
     names = {s.name for s in sites.data_gaps()}
-    assert names == {"Sefertepe", "Mendiktepe", "Söğüt Tarlası", "Biris Mezarlığı"}
+    assert names == {"Sefertepe", "Mendiktepe", "Söğüt Tarlası", "Biris Mezarlığı",
+                     "Kocanizam"}
 
 
 def test_every_site_can_be_placed_and_says_how_sure_it_is():
     rows = sites.placed()
-    assert len(rows) == len(sites.SITES) == 17
+    assert len(rows) == len(sites.SITES) == 18
     quality = {s.name: q for s, _lat, _lon, q in rows}
     assert quality["Göbeklitepe"] == "published"
     assert quality["Sefertepe"] == "conflicting"
     assert quality["Mendiktepe"] == quality["Biris Mezarlığı"] == "search area"
     # a search area is a placeholder: the site itself stays unlocated
+    # Sefertepe works on the second published value, which Clare's map supports
+    sefer = sites.find("Sefertepe")
+    assert sites.position(sefer)[:2] == sefer.alt_coord and sefer.lat != sefer.alt_coord[0]
+    # a site with no date of its own takes the span of Clare's map, marked as such
+    assert sites.find("Hamzan Tepe").date_quality == "possible"
+    assert (sites.find("Hamzan Tepe").start_bc, sites.find("Hamzan Tepe").end_bc) == (8700, 8200)
+    assert sites.find("Biris Mezarlığı").start_bc is None
     assert sites.find("Mendiktepe").lat is None
     assert sites.position(sites.find("Mendiktepe"), include_uncertain=False) is None
     assert {s.name for s, *_ in sites.placed(include_uncertain=False)} == {

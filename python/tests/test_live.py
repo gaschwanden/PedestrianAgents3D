@@ -322,3 +322,80 @@ def test_hollow_building_has_a_room_a_wall_and_a_door():
     other.apply_geometry(saved)
     assert other.sim.buildings[-1].wall_m == 0.4
     assert len(first["buildings"]) + 1 == len(desc["buildings"])
+
+
+def _synthetic_plate():
+    """A white plate with a closed yellow (EPPNB 1) ring, a red (EPPNB/MPPNB)
+    bar and one black pillar, at the real plate's size and scale."""
+    from pedsim import gobekli_plan as gp
+
+    h, w = 1736, 1178
+    img = np.full((h, w, 3), 255, dtype=np.uint8)
+    yy, xx = np.mgrid[0:h, 0:w]
+    cx, cy = gp.BUILDINGS["Building C"]
+    r = np.hypot(xx - cx, yy - cy)
+    img[(r > 150) & (r < 172)] = (228, 252, 36)          # ring, ~7 m radius, 1 m thick
+    img[300:322, 200:500] = (252, 132, 60)               # a straight wall
+    img[int(cy) - 60:int(cy) - 30, int(cx) - 8:int(cx) + 8] = (10, 10, 10)   # pillar
+    img[(np.abs(xx - 600) < 40) & (np.abs(yy - 1500) < 40)] = (215, 240, 248)  # pale outline
+    return img
+
+
+def test_plan_colours_become_phased_walls():
+    pytest.importorskip("scipy")
+    from pedsim import gobekli_plan as gp
+
+    phase, pillars = gp.classify(_synthetic_plate())
+    ids = [p.id for p in gp.PHASES]
+    assert set(np.unique(phase)) == {-1, ids.index("EPPNB1"), ids.index("EPPNB-MPPNB")}
+    assert pillars.sum() > 300
+    assert phase[1500, 600] == -1                        # the washed-out outline is not a wall
+
+    wall, pil, bounds = gp.to_cells(phase, pillars, 0.5)
+    assert abs((bounds[2] - bounds[0]) - 1178 / gp.PX_PER_M) < 0.5
+    cx, cy = gp.local_xy(*gp.BUILDINGS["Building C"])
+    i = int((cx - bounds[0]) / 0.5)
+    j = int((cy - bounds[1]) / 0.5)
+    assert wall[i, j] == -1                              # inside the ring is open
+    ring_cells = wall == ids.index("EPPNB1")
+    assert ring_cells.sum() > 150
+    # the ring is closed on the grid: flood from its centre stays inside
+    from scipy import ndimage
+    inside, _ = ndimage.label(~(ring_cells | pil))
+    assert inside[i, j] != inside[0, 0]
+    assert gp.standing_ids(ids.index("MPPNB1")) == ["MPPNB1", "MPPNB2", "post-MPPNB"]
+
+
+def test_phased_wall_layers_switch_with_the_time_window_and_survive_packing():
+    from pedsim.layers import BLOCK, Layer
+    from pedsim.phases import Phase
+
+    sim = make()
+    sim.research.phases = [Phase("early", "early", 9500, 9000, source="", confidence="assumption",
+                                 colour="#111111"),
+                           Phase("late", "late", 8500, 8000, source="", confidence="assumption",
+                                 colour="#222222")]
+    for b in sim.buildings:
+        b.phase_ids = []
+    for od in sim.ods:
+        od.phase_ids = []
+    mask = np.zeros((sim.grid.nx, sim.grid.ny))
+    mask[60, 10:90] = 1.0                                 # a long wall
+    wall = Layer("wall late", mask, kind=BLOCK, color=(9, 9, 9))
+    wall.phase_ids = ["late"]
+    sim.grid.layers.add(wall)
+    sim.apply_phase_filter()
+    assert not sim.grid.walkable[60, 50]
+
+    meta, blob = live.pack_scene(sim, "syn", "Synthetic", "village", frame_for(sim))
+    engine = live.LiveEngine()
+    engine.load(json.loads(json.dumps(meta)), blob)
+    assert not engine.sim.grid.walkable[60, 50]
+    snap = engine.snapshot()
+    assert snap["walls_nx"] == sim.grid.nx and len(snap["walls"]) == sim.grid.nx * sim.grid.ny * 4
+
+    engine.set_toggles({"chronology": True, "startBc": 9500, "endBc": 9100})
+    assert engine.describe()["active"] == ["early"]
+    assert engine.sim.grid.walkable[60, 50]               # the late wall is not built yet
+    engine.set_toggles({"startBc": 8400, "endBc": 8100})
+    assert not engine.sim.grid.walkable[60, 50]

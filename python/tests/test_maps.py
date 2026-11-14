@@ -18,8 +18,8 @@ def test_gobekli_has_an_open_architectural_plan():
     assert arch
     best = arch[0]
     assert best.access is Access.OPEN
-    assert best.importability is Importability.WITH_CONTROL
-    assert "L09" in best.grid
+    assert best.importability is Importability.YES
+    assert "L9-" in best.grid and best.scale_bar and best.north_arrow
     assert best.url.startswith("https://journals.uni-lj.si/")
 
 
@@ -50,5 +50,5 @@ def test_sites_without_drawings_say_so():
 def test_summary_covers_the_official_twelve():
     lines = maps.summary()
     assert "Göbeklitepe" in lines
-    assert lines["Göbeklitepe"].startswith("with_control")
+    assert lines["Göbeklitepe"].startswith("yes")
     assert lines["Yoğunburç"].startswith("no:")

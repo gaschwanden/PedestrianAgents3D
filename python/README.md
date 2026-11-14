@@ -475,7 +475,7 @@ it. There is no second agent model and nothing is played back.
 | File | What it is |
 | --- | --- |
 | `packs/goebekli/cluster.json` + `.bin` | the Taş Tepeler cluster: terrain on the 250 m grid, rivers, sites, and the solved routes for all three seasons |
-| `packs/goebekli/village-<site>.json` + `.bin` | one 600 m village per site (all 17), at 2 m cells, with its solved routes |
+| `packs/goebekli/village-<site>.json` + `.bin` | one 600 m village per site (all 18), at 2 m cells, with its solved routes |
 | `packs/goebekli/sat-<scene>.jpg` | Sentinel-2 cloudless 2016 (EOX, CC BY 4.0), 10 m pixels: the offline satellite basemap |
 | `packs/goebekli/osm-<scene>.geojson` | roads, tracks and place names from OpenStreetMap (ODbL), drawn over the basemap |
 | `packs/goebekli/basemap.jpg` | shaded relief rendered from the Copernicus DEM, the fallback basemap |
@@ -501,10 +501,10 @@ The satellite and road layers are downloaded when the pack is built and cached
 in `data/raw/basemap_cache`; `pedsim pack --no-maps` skips them. Online, the
 page draws detailed Esri imagery over the packed image (*Best available*).
 
-**All 17 sites take part.** Sites without a usable coordinate sit on a working
+**All 18 sites take part.** Sites without a usable coordinate sit on a working
 position (`sites.position`): Sefertepe on the first of its two conflicting
-values, Mendiktepe, Söğüt Tarlası and Biris Mezarlığı on a point in their
-published search area. They are marked with a "?" and their scene says so. A
+values, Mendiktepe, Kocanizam, Söğüt Tarlası and Biris Mezarlığı on a point in
+their published search area or read off a published map. They are marked with a "?" and their scene says so. A
 working position is a placeholder, not a location.
 
 **Why a site sends no walkers.** With chronology on, a site outside the time
@@ -551,8 +551,31 @@ one fresh commit, which GitHub Pages serves at
 static host only the relief basemap is offered, because satellite and street
 tiles need the laptop's tile proxy.
 
-**What is not in a village scene yet.** Villages are real terrain with six
-perimeter gates and a centre. Walls and buildings come from a georeferenced
+**Göbeklitepe from the published plan.** `pedsim.gobekli_plan` reads the 2024
+building-phase plan of the southeast hollow (Clare 2024, *Documenta
+Praehistorica* 51, Fig. 4; drawing M. Kinzel, DAI) into a 55 x 81 m scene at
+0.5 m cells: walls per building phase (eight, PPNA to after MPPNB) as
+switchable layers, T-pillars, the four special buildings as places. Put the
+plate at `data/raw/plans/gobeklitepe_clare2024_fig4.png`; it is not shipped,
+only the wall raster derived from it is. Read this before trusting it:
+
+- the plate gives the order of the phases, not their dates; the dates on the
+  time slider are assumptions;
+- a wall is taken to stand from its building phase onward;
+- stonework the authors left uncoloured is not included, so it is walkable;
+- the plan is placed by putting buildings A-D under the middle of the shelter
+  roof seen on satellite imagery, good to about 10 m;
+- Building C is a closed ring on the plate; an opening is cut on its south
+  side, where a U-stone and passage are published.
+
+**Sites from Clare's maps.** Clare (2024) Figs 26-28 are used for three things:
+period attributions for sites with no date of their own (marked "possible"),
+a working position for Mendiktepe and for the newly added Kocanizam read off
+the EPPNB map (about 0.5 km), and the choice between Sefertepe's two published
+positions (the map agrees with the second).
+
+**What is not in a village scene yet.** Villages other than the Göbeklitepe
+plan are real terrain with six perimeter gates and a centre. Walls and buildings come from a georeferenced
 plan (`pedsim.plans`) or are drawn in; none ship. Terrain is the 30 m DEM,
 interpolated to the 2 m grid, so it shows the hill, not the architecture.
 

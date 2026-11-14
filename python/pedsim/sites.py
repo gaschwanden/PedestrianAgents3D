@@ -90,6 +90,10 @@ class Site:
     #: a placeholder so the site can take part in a run, never a location:
     #: ``lat``/``lon`` stay ``None`` and every client marks the site as unsure.
     search_coord: Optional[Tuple[float, float]] = None
+    #: For a ``CONFLICTING`` site: which of the two values to *work* on, when
+    #: independent evidence favours one. ``"alt"`` or ``""`` (the first). The
+    #: conflict stays recorded; this only picks the working position.
+    prefer: str = ""
     sources: Tuple[str, ...] = ()
     note: str = ""
     phase_ids: Tuple[str, ...] = ()
@@ -143,6 +147,9 @@ SITES: List[Site] = [
         name="Sefertepe", aliases=("Sefer Tepe",),
         lat=37.18643, lon=39.48982, confidence=Confidence.CONFLICTING,
         alt_coord=(37.17230, 39.48950),
+        # Clare24 Fig. 28 plots Sefer Tepe 0.6 km from this second value and
+        # 2.1 km from the first, read off the figure with ~0.5 km accuracy.
+        prefer="alt",
         period="Early/Middle PPNB", start_bc=8300, end_bc=8000,
         elevation_m=700.0, area_ha=0.1, official=True,
         setting="Low shallow mound; Viranşehir plain N and E, Tektek Mountains S and W",
@@ -232,7 +239,11 @@ SITES: List[Site] = [
     Site(
         name="Mendiktepe", aliases=("Mendik Tepe",),
         lat=None, lon=None, confidence=Confidence.UNKNOWN,
-        search_coord=(37.0400, 38.6200),      # centre of the box in the note
+        # Read off Clare24 Fig. 28 (map georeferenced on five published sites,
+        # ~0.5 km accuracy). It is 4.9 km from Çakmaktepe and 13 km SW of
+        # Şanlıurfa, as the descriptions say, but 6.8 km from the box the
+        # "1.3 km NE of Mendik village" clue gave; the two clues disagree.
+        search_coord=(37.0743, 38.6835),
         period="PPNA, possibly terminal Epipalaeolithic", start_bc=10000, end_bc=9000,
         area_ha=4.0, official=True,
         setting="Upper part of a ~200 m ridge between a higher southern and a lower "
@@ -270,6 +281,16 @@ SITES: List[Site] = [
              "No coordinate published anywhere found; Biris village is at "
              "37.3095, 38.5500. Listed separately because the two are distinct "
              "find-spots.",
+    ),
+    Site(
+        name="Kocanizam", aliases=("Kocanizam Tepesi",),
+        lat=None, lon=None, confidence=Confidence.UNKNOWN,
+        search_coord=(37.2013, 39.4844),      # read off Clare24 Fig. 28, ~0.5 km
+        period="possible Early PPNB", official=False,
+        sources=("Clare24",),
+        note="Known here only from the map in Clare24 Fig. 28, where it is "
+             "plotted as a possible EPPNB site ~3.7 km north of Sefer Tepe. "
+             "No coordinate or description found.",
     ),
     # --- related PPN sites, not on the official twelve ---------------------
     Site(
@@ -318,13 +339,44 @@ SITES: List[Site] = [
     ),
 ]
 
+#: Period attributions plotted in Clare24, Figs 26-28 (Epipalaeolithic
+#: 10900-9600, PPNA 9600-8700, EPPNB 8700-8200 cal BC). ``True`` is a site the
+#: map draws solid, ``False`` one it draws as "possible".
+CLARE24_PERIODS: Dict[str, Tuple[Tuple[str, int, int, bool], ...]] = {
+    "Söğüt Tarlası": (("Epipalaeolithic", 10900, 9600, False),),
+    "Çakmaktepe": (("Epipalaeolithic", 10900, 9600, False), ("PPNA", 9600, 8700, True)),
+    "Göbeklitepe": (("PPNA", 9600, 8700, True), ("EPPNB", 8700, 8200, True)),
+    "Karahantepe": (("PPNA", 9600, 8700, True), ("EPPNB", 8700, 8200, True)),
+    "Nevalı Çori": (("EPPNB", 8700, 8200, True),),
+    "Şanlıurfa Yeni Mahalle": (("EPPNB", 8700, 8200, True),),
+    "Sayburç": (("EPPNB", 8700, 8200, True),),
+    "Harbetsuvan Tepesi": (("EPPNB", 8700, 8200, True),),
+    "Sefertepe": (("EPPNB", 8700, 8200, True),),
+    "Taşlı Tepe": (("EPPNB", 8700, 8200, False),),
+    "Kurt Tepesi": (("EPPNB", 8700, 8200, False),),
+    "Kocanizam": (("EPPNB", 8700, 8200, False),),
+    "Ayanlar Höyük": (("EPPNB", 8700, 8200, False),),
+    "Yoğunburç": (("EPPNB", 8700, 8200, False),),
+    "Hamzan Tepe": (("EPPNB", 8700, 8200, False),),
+    "Mendiktepe": (("EPPNB", 8700, 8200, False),),
+}
+
 # The Ministry of Culture's official Taş Tepeler twelve.
 TAS_TEPELER_12: Tuple[str, ...] = tuple(s.name for s in SITES if s.official)
 
 for _site in SITES:
     note = _site.note.lower()
     if _site.start_bc is None or _site.end_bc is None:
-        _site.date_quality = "none"
+        # No date of its own: take the span Clare24 plots it in, and say that
+        # it is an attribution on a map, not a dated occupation.
+        spans = CLARE24_PERIODS.get(_site.name)
+        if spans:
+            _site.start_bc = max(s[1] for s in spans)
+            _site.end_bc = min(s[2] for s in spans)
+            _site.date_quality = "possible"
+            _site.sources = tuple(_site.sources) + ("Clare24 Figs 26-28",)
+        else:
+            _site.date_quality = "none"
     elif "14c" in note or "radiocarbon" in note:
         _site.date_quality = "radiocarbon"
     else:
@@ -373,6 +425,8 @@ def position(site: Site, include_uncertain: bool = True
     if not include_uncertain:
         return None
     if site.located:
+        if site.prefer == "alt" and site.alt_coord is not None:
+            return site.alt_coord[0], site.alt_coord[1], Confidence.CONFLICTING.value
         return site.lat, site.lon, Confidence.CONFLICTING.value
     if site.search_coord is not None:
         return site.search_coord[0], site.search_coord[1], "search area"

@@ -79,15 +79,16 @@ GOBEKLI: List[PlanSource] = [
                  "Drawing: M. Kinzel, DAI Göbeklitepe Project 2024.",
         url="https://journals.uni-lj.si/DocumentaPraehistorica/article/download/18771/16444/65967",
         access=Access.OPEN,
-        importability=Importability.WITH_CONTROL,
-        scale_bar=None,
-        north_arrow=None,
-        grid="trenches L09-58 … L09-80 (DAI 10 m squares)",
-        extent_m="main excavation area, on the order of 50–80 m",
+        importability=Importability.YES,
+        scale_bar=True,
+        north_arrow=True,
+        grid="trenches L9-54 … L10-81 (DAI 10 m squares, 9 m inside the baulks)",
+        extent_m="55 x 81 m at 21.55 px/m in the published plate",
         note="Best currently open architectural plan of the excavated enclosures. "
-             "The PDF caption does not state a scale bar; the labelled 10 m "
-             "trench grid is the control-point route. Buildings A–D are "
-             "multi-phase and shrink over time — this plate is a composite.",
+             "Verified on the plate: 10 m scale bar, north arrow, labelled trench "
+             "grid, and walls coloured by eight preliminary building phases "
+             "(PPNA to after MPPNB). Imported by pedsim.gobekli_plan. Buildings "
+             "A–D are multi-phase and shrink over time — this plate is a composite.",
     ),
     PlanSource(
         site="Göbeklitepe",
@@ -323,6 +324,62 @@ MENDIKTEPE: List[PlanSource] = [
     ),
 ]
 
+GOBEKLI_EXTRA: List[PlanSource] = [
+    PlanSource(
+        site="Göbeklitepe",
+        title="Central alignments of the main Level III buildings (schematic plan)",
+        kind=PlanKind.ARCHITECTURE,
+        citation="Open Archaeology, doi:10.1515/opar-2022-0317, Fig. 6. VERIFY authors and year.",
+        url="https://doi.org/10.1515/opar-2022-0317",
+        access=Access.OPEN,
+        importability=Importability.WITH_CONTROL,
+        scale_bar=True,
+        north_arrow=True,
+        grid="trench outlines drawn, unlabelled",
+        extent_m="about 45 x 50 m; buildings E and F are insets, not in place",
+        note="Simplified Level III walls and pillars of buildings A-D with a 10 m "
+             "scale bar. Not imported: the 2024 phase plan is more detailed. Used "
+             "as evidence for entrances: it marks a U-stone and passage south of "
+             "Building C and a U-stone at the south-east end of Building A.",
+    ),
+    PlanSource(
+        site="Göbeklitepe",
+        title="Wild boar depictions in special buildings A-D (distribution on the phase plan)",
+        kind=PlanKind.ARCHITECTURE,
+        citation="Clare, L. (2024) Documenta Praehistorica 51, Fig. 13. Image: M. Kinzel, "
+                 "changes and additions by L. Clare.",
+        access=Access.OPEN,
+        importability=Importability.NO,
+        note="Same base drawing as Fig. 4 with find-spots of boar imagery. No "
+             "additional architecture; relevant if depictions become places.",
+    ),
+    PlanSource(
+        site="Göbeklitepe",
+        title="Aerial photograph of the rectangular buildings in the north-west area",
+        kind=PlanKind.PHOTO,
+        citation="Clare, L. (2020) e-Forschungsberichte des DAI 2020/2, p. 84, Fig. 4. "
+                 "VERIFY the full reference.",
+        access=Access.OPEN,
+        importability=Importability.NO,
+        scale_bar=False,
+        north_arrow=True,
+        note="A vertical drone photograph with a north arrow and no scale. It shows "
+             "a row of rectangular rooms beside a walkway, but cannot be scaled "
+             "or placed without control points, so nothing is imported from it.",
+    ),
+]
+
+KOCANIZAM: List[PlanSource] = [
+    PlanSource(
+        site="Kocanizam",
+        title="Plotted on a regional map only; no plan",
+        kind=PlanKind.ARCHITECTURE,
+        citation="Clare, L. (2024) Documenta Praehistorica 51, Fig. 28.",
+        importability=Importability.NO,
+        note="A dot on the EPPNB map of the Taş Tepeler region. No architecture published.",
+    ),
+]
+
 SOGUT: List[PlanSource] = [
     PlanSource(
         site="Söğüt Tarlası",
@@ -396,7 +453,7 @@ SOURCES: List[PlanSource] = (
     GOBEKLI + KARAHAN + SAYBURC + SEFERTEPE + CAKMAKTEPE
     + NEVALI + HARBETSUVAN + AYANLAR + HAMZAN
     + GURCUTEPE + YENI_MAHALLE + YOGUNBURC + MENDIKTEPE
-    + SOGUT + TASLI + KURT + REGIONAL
+    + SOGUT + TASLI + KURT + REGIONAL + KOCANIZAM + GOBEKLI_EXTRA
 )
 
 

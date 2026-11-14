@@ -75,6 +75,7 @@ function sendFrame(snapshot, ms, steps) {
   const field = new Float32Array(frame.field.slice().buffer);
   frame.agents = agents;
   frame.groups = groups;
+  if (frame.walls) frame.walls = new Uint8ClampedArray(frame.walls.slice().buffer);
   frame.ids = ids;
   frame.ages = ages;
   frame.field = field;

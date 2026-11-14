@@ -174,10 +174,19 @@ def _read(blob, entry: dict) -> np.ndarray:
     return arr.reshape(entry["shape"]).astype(float)
 
 
+#: Layers the simulation rebuilds itself and that are therefore not packed.
+DERIVED_LAYERS = ("rivers", "flood", "construction")
+
+
+def packed_layers(sim: Simulation) -> list:
+    return [layer for layer in sim.grid.layers if layer.name not in DERIVED_LAYERS]
+
+
 def phase_key(sim: Simulation) -> str:
     """Identifies the walkable geometry: the active phases if any geometry is phased."""
     phased = any(getattr(item, "phase_ids", None)
-                 for item in list(sim.buildings) + list(sim.obstacles))
+                 for item in list(sim.buildings) + list(sim.obstacles)
+                 + packed_layers(sim))
     if not phased:
         return "*"
     return ",".join(sorted(sim.research.current_phase_ids() or []))
@@ -202,6 +211,16 @@ def pack_scene(sim: Simulation, scene_id: str, name: str, scale: str,
     blob = _Blob()
     if grid.elevation is not None:
         blob.add("elevation", grid.elevation)
+
+    layers = []
+    for n, layer in enumerate(packed_layers(sim)):
+        entry = f"layer/{n}"
+        blob.add(entry, layer.data)
+        layers.append({
+            "name": layer.name, "kind": layer.kind, "weight": layer.weight,
+            "color": list(layer.color), "description": layer.description,
+            "phase_ids": list(layer.phase_ids), "array": entry,
+        })
 
     costs: Dict[str, Dict[str, str]] = {}
     home = sim.season
@@ -254,6 +273,7 @@ def pack_scene(sim: Simulation, scene_id: str, name: str, scale: str,
             "tau": r.tau, "undated_policy": r.undated_policy,
         },
         "geometry": sim.geometry_dict(),
+        "layers": layers,
         "sites": sites or [],
         "arrays": blob.index,
         "costs": costs,
@@ -337,6 +357,19 @@ def build_simulation(meta: dict, blob=None, use_packed_costs: bool = True,
         topography=topo, terrain_cost=TerrainCost(**meta.get("terrain_cost", {})),
         seed=seed, cost_field_provider=provider, **params,
     )
+    if meta.get("layers") and blob is not None:
+        from .layers import Layer
+
+        for item in meta["layers"]:
+            layer = Layer(item["name"], _read(blob, arrays[item["array"]]),
+                          weight=float(item.get("weight", 1.0)), kind=item["kind"],
+                          color=tuple(item.get("color", (120, 120, 120))),
+                          description=item.get("description", ""))
+            layer.phase_ids = list(item.get("phase_ids") or [])
+            sim.grid.layers.add(layer)
+        # walls change what is walkable; the routes still come from the pack
+        sim.grid.refresh_layers(force=True)
+        sim._build_cost_fields()
     sim.pack_seed = seed
     sim.respawn_at_origin = respawn
     sim._packed_research = (phases, geo, meta.get("research", {}))
@@ -643,6 +676,11 @@ class LiveEngine:
             out["isovist"] = self._isovist
         if self.version != self._sent_version:
             out["describe"] = self.describe()
+            walls = self._wall_image()
+            if walls is not None:
+                out["walls"] = walls.tobytes()
+                out["walls_nx"] = int(walls.shape[1])
+                out["walls_ny"] = int(walls.shape[0])
             self._sent_version = self.version
         return out
 
@@ -657,6 +695,21 @@ class LiveEngine:
             field = padded.reshape(c, (nx + px) // stride, stride,
                                    (ny + py) // stride, stride).max(axis=(2, 4))
         return np.transpose(field, (0, 2, 1))[:, ::-1, :]
+
+    def _wall_image(self) -> Optional[np.ndarray]:
+        """RGBA picture of the blocking layers that are on, north at the top,
+        one pixel per cell: walls read from a plan, in their phase colours."""
+        grid = self.sim.grid
+        layers = [layer for layer in packed_layers(self.sim)
+                  if layer.kind == "block" and layer.enabled]
+        if not layers:
+            return None if not packed_layers(self.sim) else np.zeros((1, 1, 4), dtype="u1")
+        image = np.zeros((grid.nx, grid.ny, 4), dtype="u1")
+        for layer in layers:
+            mask = layer.data > 0
+            image[mask, :3] = layer.color
+            image[mask, 3] = 255
+        return np.ascontiguousarray(np.transpose(image, (1, 0, 2))[::-1])
 
     def _traces(self) -> List[dict]:
         lines = []

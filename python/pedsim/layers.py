@@ -62,6 +62,10 @@ class Layer:
     weight_step: float = 0.25
     max_weight: float = 8.0
     description: str = ""
+    #: Building phases this layer belongs to (walls read from a phased plan).
+    #: Empty means every phase. ``Simulation.apply_phase_filter`` sets the
+    #: weight of a phased layer to 1 or 0 as its phases go on and off.
+    phase_ids: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.data = np.asarray(self.data, dtype=float)

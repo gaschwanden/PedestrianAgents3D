@@ -331,6 +331,18 @@ class Simulation:
 
     def apply_phase_filter(self) -> None:
         """Rebuild walkability for the active phases and refresh cost fields."""
+        # walls that came as phased layers (a plan read as a raster) go on and
+        # off with their phases, like phased footprints do
+        changed = False
+        for layer in self.grid.layers:
+            if layer.phase_ids:
+                weight = 1.0 if self.research.phase_allows(layer.phase_ids) else 0.0
+                if layer.weight != weight:
+                    layer.weight = weight
+                    changed = True
+        if changed:
+            self.grid.layers.touch()
+        self.grid.refresh_layers(force=True)
         buildings, obstacles = self.geometry_for_grid()
         self.grid.set_geometry(buildings, obstacles, self.site_polygon)
         boxes = []
