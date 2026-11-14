@@ -30,7 +30,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v18";
+  const CACHE = "pedsim-field-v19";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -79,18 +79,19 @@
     pulses: [],           // walkers that just set out again: [lon, lat, group, t0]
     lastSteps: 1,
     draft: null,          // building being drawn: {shape, a, b, dragging}
+    walls: null,          // {data, nx, ny}: RGBA wall picture of a plan scene
     proxy: false,         // true when pedsim serve is behind this page (tiles, hub)
     mapReady: false,
   };
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=18");
+  const worker = new Worker("worker.js?v=19");
   const canvas = document.createElement("canvas");
-  // walls read from a plan (one pixel per cell, phase colours)
-  const wallCanvas = document.createElement("canvas");
-  wallCanvas.width = 1;
-  wallCanvas.height = 1;
+  // Walls read from a plan (one pixel per cell, phase colours) are painted
+  // into the same canvas as the density. A second canvas source would be the
+  // obvious way, but this MapLibre build draws every canvas source after the
+  // first as an opaque black rectangle.
   let map = null;
 
   function t(key) {
@@ -402,20 +403,32 @@
         image.data[pixel + 3] = Math.round(90 + 150 * top);
       }
     }
+    const walls = state.walls;
+    if (walls) {
+      // over the heat, fully opaque, whatever the analysis mode
+      for (let y = 0; y < ny; y++) {
+        const wy = Math.min(walls.ny - 1, Math.floor(y * walls.ny / ny));
+        for (let x = 0; x < nx; x++) {
+          const wx = Math.min(walls.nx - 1, Math.floor(x * walls.nx / nx));
+          const w = (wy * walls.nx + wx) * 4;
+          if (!walls.data[w + 3]) continue;
+          const pixel = (y * nx + x) * 4;
+          image.data[pixel] = walls.data[w];
+          image.data[pixel + 1] = walls.data[w + 1];
+          image.data[pixel + 2] = walls.data[w + 2];
+          image.data[pixel + 3] = 255;
+        }
+      }
+    }
     ctx.putImageData(image, 0, 0);
     map.setPaintProperty("density", "raster-opacity", Number(document.getElementById("opacity").value));
     map.triggerRepaint();
   }
 
   function paintWalls(frame) {
-    const nx = frame.walls ? frame.walls_nx : 1;
-    const ny = frame.walls ? frame.walls_ny : 1;
-    wallCanvas.width = nx;
-    wallCanvas.height = ny;
-    const ctx = wallCanvas.getContext("2d");
-    ctx.clearRect(0, 0, nx, ny);
-    if (frame.walls) ctx.putImageData(new ImageData(frame.walls, nx, ny), 0, 0);
-    if (map) map.triggerRepaint();
+    state.walls = frame.walls
+      ? { data: frame.walls, nx: frame.walls_nx, ny: frame.walls_ny } : null;
+    paint();
   }
 
   function featurePoint(coords, props) {
@@ -985,14 +998,6 @@
             "raster-fade-duration": 0,
           },
         });
-        map.addSource("walls", {
-          type: "canvas", canvas: wallCanvas, animate: true,
-          coordinates: [[38.4, 37.5], [39.3, 37.5], [39.3, 36.8], [38.4, 36.8]],
-        });
-        map.addLayer({
-          id: "walls", type: "raster", source: "walls",
-          paint: { "raster-opacity": 0.92, "raster-resampling": "nearest", "raster-fade-duration": 0 },
-        });
         map.addSource("rivers", { type: "geojson", data: empty });
         map.addLayer({
           id: "rivers", type: "line", source: "rivers",
@@ -1215,7 +1220,6 @@
     const desc = state.desc;
     if (!map || !state.mapReady || !desc) return;
     map.getSource("density").setCoordinates(desc.corners);
-    map.getSource("walls").setCoordinates(desc.corners);
     map.easeTo({
       center: desc.center,
       zoom: desc.zoom || (desc.scale === "cluster" ? 9.5 : 16),
