@@ -538,6 +538,12 @@ are the same switches as the desktop Research tab. **REC** records a GPS track
 (it keeps the screen awake, and stores accuracy and altitude per fix); **GPX**
 exports it.
 
+**Image on the ground.** *Add image* (or **IMG**) lays any picture, such as a
+plan or a drone photograph, over the map. Drag its four corners to stretch it
+onto what the basemap shows, and the white square to move it; *Adjust* shows
+the handles again later. It is kept on the device per scene. It is a drawing
+aid for placing buildings: the model does not read it.
+
 **Offline.** *Download all* stores the whole pack and the engine on the device
 (about 110 MB). The basemap then switches to *Relief (offline)*; Google, Esri
 and OpenStreetMap tiles are online-only because their terms forbid storing

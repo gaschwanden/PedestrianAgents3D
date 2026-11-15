@@ -7,8 +7,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Argument: a remote name (default origin) or a full URL. On a network that
+# blocks SSH port 22, GitHub also answers on 443:
+#   scripts/publish_field.sh ssh://git@ssh.github.com:443/<owner>/<repo>.git
 REMOTE="${1:-origin}"
-URL="$(git -C "$ROOT" remote get-url "$REMOTE")"
+case "$REMOTE" in
+  *://*|*@*:*) URL="$REMOTE" ;;
+  *) URL="$(git -C "$ROOT" remote get-url "$REMOTE")" ;;
+esac
 [ -f "$ROOT/web/packs/goebekli/index.json" ] || { echo "no pack in web/: run python -m pedsim pack" >&2; exit 1; }
 
 WORK="$(mktemp -d)"

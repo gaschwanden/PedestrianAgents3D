@@ -5,14 +5,14 @@
    - Scene packs and the Python runtime are large and versioned by URL
      (?v=<build>), so they are served cache-first and never re-downloaded.
    - Google / Esri / OSM tiles stay on the network and are never stored. */
-const CACHE = "pedsim-field-v19";
+const CACHE = "pedsim-field-v20";
 const SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=19",
-  "./app.js?v=19",
-  "./worker.js?v=19",
-  "./strings.js?v=19",
+  "./styles.css?v=20",
+  "./app.js?v=20",
+  "./worker.js?v=20",
+  "./strings.js?v=20",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

@@ -25,12 +25,13 @@
     { id: "top", label: "2D", tip: "tipTop", group: "action" },
     { id: "tilt45", label: "3D", tip: "tipTilt45", group: "action" },
     { id: "iso", label: "Iso", tip: "tipIso", group: "toggle" },
+    { id: "image", label: "IMG", tip: "tipImage", group: "toggle" },
     { id: "reset", label: "X", tip: "tipReset", group: "action" },
   ];
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v19";
+  const CACHE = "pedsim-field-v20";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -80,13 +81,16 @@
     lastSteps: 1,
     draft: null,          // building being drawn: {shape, a, b, dragging}
     walls: null,          // {data, nx, ny}: RGBA wall picture of a plan scene
+    overlay: null,        // {id, dataUrl, corners [nw, ne, se, sw], opacity}
+    overlayEdit: false,
+    overlayHandles: [],
     proxy: false,         // true when pedsim serve is behind this page (tiles, hub)
     mapReady: false,
   };
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=19");
+  const worker = new Worker("worker.js?v=20");
   const canvas = document.createElement("canvas");
   // Walls read from a plan (one pixel per cell, phase colours) are painted
   // into the same canvas as the density. A second canvas source would be the
@@ -133,7 +137,7 @@
 
   function db() {
     return new Promise(function (resolve, reject) {
-      const request = indexedDB.open("pedsim-field", 4);
+      const request = indexedDB.open("pedsim-field", 5);
       request.onupgradeneeded = function () {
         const base = request.result;
         if (!base.objectStoreNames.contains("notes")) base.createObjectStore("notes", { keyPath: "id" });
@@ -142,6 +146,8 @@
         if (!base.objectStoreNames.contains("buildings")) base.createObjectStore("buildings", { keyPath: "id" });
         // one saved geometry per scene id, in the desktop save format
         if (!base.objectStoreNames.contains("saves")) base.createObjectStore("saves", { keyPath: "id" });
+        // one imported ground image per scene id
+        if (!base.objectStoreNames.contains("overlays")) base.createObjectStore("overlays", { keyPath: "id" });
       };
       request.onsuccess = function () { resolve(request.result); };
       request.onerror = function () { reject(request.error); };
@@ -262,7 +268,8 @@
     const bar = document.getElementById("hint");
     let line = text || "";
     if (!line) {
-      if (state.recording) line = t("hintRecord");
+      if (state.overlayEdit) line = t("overlayHint");
+      else if (state.recording) line = t("hintRecord");
       else if (state.mode && HINTS[state.mode]) line = t(HINTS[state.mode]);
       else if (state.showIso) line = t("hintIso");
     }
@@ -284,6 +291,7 @@
       if (id === state.mode) on = true;
       if (id === "record" && state.recording) on = true;
       if (id === "iso" && state.showIso) on = true;
+      if (id === "image" && state.overlayEdit) on = true;
       if (id === "run" && state.playing) on = true;
       if (id === "pause" && !state.playing) on = true;
       button.classList.toggle("active", on);
@@ -861,7 +869,9 @@
   };
 
   function firstOverlay() {
-    // Basemap layers go under everything pedsim draws, roads included.
+    // Basemap layers go under everything pedsim draws, roads included, and
+    // under an imported image.
+    if (map.getLayer("overlay")) return "overlay";
     if (map.getLayer("osm-roads")) return "osm-roads";
     return map.getLayer("density") ? "density" : undefined;
   }
@@ -1195,6 +1205,7 @@
           id: "iso", type: "fill", source: "iso",
           paint: { "fill-color": "#ffffff", "fill-opacity": 0.22, "fill-outline-color": "#ffffff" },
         });
+        showOverlay();
         map.on("click", onMapClick);
         ["mousedown", "touchstart"].forEach(function (name) { map.on(name, draftDown); });
         ["mousemove", "touchmove"].forEach(function (name) { map.on(name, draftMove); });
@@ -1298,6 +1309,7 @@
     }
     pause();
     state.sceneId = id;
+    loadOverlay(id);
     state.draft = null;
     state.pulses = [];
     setNet();              // the packed satellite image is per scene
@@ -1716,6 +1728,11 @@
       if (map) map.easeTo({ pitch: 45, bearing: -20, duration: 400 });
       return;
     }
+    if (id === "image") {
+      if (!state.overlay) document.getElementById("overlay-file").click();
+      else setOverlayEdit(!state.overlayEdit);
+      return;
+    }
     if (id === "iso") {
       state.showIso = !state.showIso;
       if (!state.showIso) {
@@ -1743,6 +1760,166 @@
       updateMapInteraction();
     }
   }
+
+  // ------------------------------------------------- image on the ground
+  // Any picture (a plan, a drone photograph) laid over the map as a
+  // quadrilateral. Each corner is dragged on its own, so the picture can be
+  // moved, turned, scaled and squared up against what the basemap shows. It is
+  // a drawing aid: the model does not read it.
+  function showOverlay() {
+    if (!map || !state.mapReady) return;
+    if (map.getLayer("overlay")) map.removeLayer("overlay");
+    if (map.getSource("overlay")) map.removeSource("overlay");
+    const item = state.overlay;
+    document.getElementById("overlay-edit").disabled = !item;
+    document.getElementById("overlay-remove").disabled = !item;
+    if (!item) {
+      setOverlayEdit(false);
+      return;
+    }
+    map.addSource("overlay", { type: "image", url: item.dataUrl, coordinates: item.corners });
+    map.addLayer({
+      id: "overlay", type: "raster", source: "overlay",
+      paint: { "raster-opacity": item.opacity, "raster-fade-duration": 0 },
+    }, map.getLayer("osm-roads") ? "osm-roads" : undefined);
+    document.getElementById("overlay-opacity").value = String(item.opacity);
+    placeHandles();
+  }
+
+  function overlayCentre(corners) {
+    return [
+      (corners[0][0] + corners[1][0] + corners[2][0] + corners[3][0]) / 4,
+      (corners[0][1] + corners[1][1] + corners[2][1] + corners[3][1]) / 4,
+    ];
+  }
+
+  function placeHandles() {
+    state.overlayHandles.forEach(function (marker) { marker.remove(); });
+    state.overlayHandles = [];
+    const item = state.overlay;
+    if (!item || !state.overlayEdit || !map) return;
+    const apply = function () {
+      map.getSource("overlay").setCoordinates(item.corners);
+    };
+    const corners = item.corners.map(function (corner, index) {
+      const node = document.createElement("div");
+      node.className = "overlay-handle";
+      const marker = new maplibregl.Marker({ element: node, draggable: true })
+        .setLngLat(corner).addTo(map);
+      marker.on("drag", function () {
+        const at = marker.getLngLat();
+        item.corners[index] = [at.lng, at.lat];
+        mover.setLngLat(overlayCentre(item.corners));
+        apply();
+      });
+      marker.on("dragend", function () { put("overlays", item); });
+      return marker;
+    });
+    const node = document.createElement("div");
+    node.className = "overlay-handle move";
+    const mover = new maplibregl.Marker({ element: node, draggable: true })
+      .setLngLat(overlayCentre(item.corners)).addTo(map);
+    let last = overlayCentre(item.corners);
+    mover.on("drag", function () {
+      const at = mover.getLngLat();
+      const dx = at.lng - last[0];
+      const dy = at.lat - last[1];
+      last = [at.lng, at.lat];
+      item.corners = item.corners.map(function (corner) { return [corner[0] + dx, corner[1] + dy]; });
+      corners.forEach(function (marker, index) { marker.setLngLat(item.corners[index]); });
+      apply();
+    });
+    mover.on("dragstart", function () { last = overlayCentre(item.corners); });
+    mover.on("dragend", function () { put("overlays", item); });
+    state.overlayHandles = corners.concat([mover]);
+  }
+
+  function setOverlayEdit(on) {
+    state.overlayEdit = Boolean(on && state.overlay);
+    document.getElementById("overlay-edit").textContent =
+      state.overlayEdit ? t("overlayDone") : t("overlayEdit");
+    document.getElementById("overlay-edit").classList.toggle("active", state.overlayEdit);
+    placeHandles();
+    paintToolbar();
+  }
+
+  function loadOverlay(id) {
+    state.overlay = null;
+    state.overlayEdit = false;
+    all("overlays").then(function (rows) {
+      if (state.sceneId !== id) return;
+      state.overlay = rows.filter(function (row) { return row.id === id; })[0] || null;
+      showOverlay();
+    }).catch(function () { showOverlay(); });
+  }
+
+  function addOverlayFile(file) {
+    const reader = new FileReader();
+    reader.onerror = function () { setStatus(t("overlayBad")); };
+    reader.onload = function () {
+      const picture = new Image();
+      picture.onerror = function () { setStatus(t("overlayBad")); };
+      picture.onload = function () {
+        // keep it small enough for a phone's texture limit and for storage
+        const scale = Math.min(1, 2048 / Math.max(picture.width, picture.height));
+        const sheet = document.createElement("canvas");
+        sheet.width = Math.round(picture.width * scale);
+        sheet.height = Math.round(picture.height * scale);
+        sheet.getContext("2d").drawImage(picture, 0, 0, sheet.width, sheet.height);
+        // start north-up in the middle of the view, 40 % of its width
+        const view = map.getBounds();
+        const centre = map.getCenter();
+        const m = metresPerDegree(centre.lat);
+        const halfW = 0.2 * (view.getEast() - view.getWest()) * m.lon;
+        const halfH = halfW * sheet.height / sheet.width;
+        const dx = halfW / m.lon;
+        const dy = halfH / m.lat;
+        state.overlay = {
+          id: state.sceneId,
+          name: file.name,
+          dataUrl: sheet.toDataURL("image/jpeg", 0.85),
+          corners: [
+            [centre.lng - dx, centre.lat + dy], [centre.lng + dx, centre.lat + dy],
+            [centre.lng + dx, centre.lat - dy], [centre.lng - dx, centre.lat - dy],
+          ],
+          opacity: Number(document.getElementById("overlay-opacity").value),
+        };
+        put("overlays", state.overlay);
+        state.overlayEdit = true;
+        showOverlay();
+        setOverlayEdit(true);
+      };
+      picture.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  document.getElementById("overlay-add").addEventListener("click", function () {
+    document.getElementById("overlay-file").click();
+  });
+  document.getElementById("overlay-file").addEventListener("change", function (event) {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (file) addOverlayFile(file);
+  });
+  document.getElementById("overlay-edit").addEventListener("click", function () {
+    if (!state.overlay) setStatus(t("overlayNone"));
+    else setOverlayEdit(!state.overlayEdit);
+  });
+  document.getElementById("overlay-remove").addEventListener("click", function () {
+    const id = state.sceneId;
+    state.overlay = null;
+    db().then(function (base) {
+      base.transaction("overlays", "readwrite").objectStore("overlays").delete(id);
+    });
+    showOverlay();
+  });
+  document.getElementById("overlay-opacity").addEventListener("input", function (event) {
+    if (!state.overlay) return;
+    state.overlay.opacity = Number(event.target.value);
+    if (map && map.getLayer("overlay")) map.setPaintProperty("overlay", "raster-opacity", state.overlay.opacity);
+    put("overlays", state.overlay);
+  });
 
   // ------------------------------------------------------------ offline pack
   function packFiles() {
