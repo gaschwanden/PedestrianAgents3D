@@ -31,7 +31,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v23";
+  const CACHE = "pedsim-field-v24";
   const ENGINE_FILES = [
     "vendor/pedsim.zip?v=" + new URL(document.currentScript.src).searchParams.get("v"),
     "vendor/pyodide/pyodide.js",
@@ -90,7 +90,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=23");
+  const worker = new Worker("worker.js?v=24");
   const canvas = document.createElement("canvas");
   // Walls read from a plan (one pixel per cell, phase colours) are painted
   // into the same canvas as the density. A second canvas source would be the
@@ -645,8 +645,16 @@
     const ox = (best.proj[0] - cx) * m.lon;
     const oy = (best.proj[1] - cy) * m.lat;
     const len = Math.hypot(ox, oy) || 1;
-    const out = Math.max(3, 2 * ((state.desc && state.desc.grid.gridsize) || 2));
+    const out = Math.max(3, 2 * finestCell());
     return [best.proj[0] + (out * ox / len) / m.lon, best.proj[1] + (out * oy / len) / m.lat];
+  }
+
+  // The smallest cell of the scene: in a nested scene buildings go on the
+  // fine patches, so that is the size that matters for them.
+  function finestCell() {
+    const desc = state.desc;
+    if (!desc) return 2;
+    return desc.nested ? desc.nested.fine : desc.grid.gridsize;
   }
 
   function setData(source, features) {
@@ -871,6 +879,12 @@
     if (message.describe) {
       applyDescribe(message.describe);
       paintWalls(message);      // walls change only when the scene does
+      if (state.editStarted) {
+        const secs = ((performance.now() - state.editStarted) / 1000).toFixed(1);
+        setStatus((state.afterEdit || t("saved")) + " (" + secs + " s)");
+        state.editStarted = 0;
+        state.afterEdit = "";
+      }
     }
     state.frame = message;
     paint();
@@ -1527,6 +1541,7 @@
     // A wall edit re-solves every route, which takes a while on a phone.
     if (name === "addBuilding" || name === "deleteBuilding" || name === "applyGeometry" || name === "reset") {
       setStatus(t("working"));
+      state.editStarted = performance.now();
     }
     worker.postMessage({ type: "command", name: name, payload: payload });
   }
@@ -1591,7 +1606,7 @@
   function finishDraft() {
     const draft = state.draft;
     const ring = draftRing(draft);
-    const cell = (state.desc && state.desc.grid.gridsize) || 2;
+    const cell = finestCell();
     const small = !ring || (draft.shape === "circle"
       ? distMetres(draft.a, draft.b) < cell
       : Math.min(distMetres(draft.a, [draft.b[0], draft.a[1]]),
@@ -1616,9 +1631,11 @@
     const centre = [cx / (ring.length - 1), cy / (ring.length - 1)];
     const toward = nearestPlace(centre);
     const door = entranceFromDoor(ring, toward ? toward.coordinates : [centre[0], centre[1] - 1e-4]);
+    // Said once the engine has the building: re-solving every route can take
+    // a while on a large scene, and "added" before it shows is misleading.
+    state.afterEdit = t("bdEntrance") + " " + (toward ? toward.name : "south");
     edit("addBuilding", { ring: ring, door: door, function: "domestic", height: 3 });
     cancelDraft();
-    setStatus(t("bdEntrance") + " " + (toward ? toward.name : "south"));
   }
 
   function draftDown(event) {

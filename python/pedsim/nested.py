@@ -333,8 +333,16 @@ def solve(sim, key: int, ox: float, oy: float) -> None:
     walk = [g.walkable_rows() for g in all_grids]
     steps = [g._step_costs() for g in all_grids]
     size = [(g.nx, g.ny) for g in all_grids]
-    elev = [g.elevation.tolist() if g.elevation is not None else None for g in all_grids]
-    fric = [g.friction.tolist() if g.friction is not None else None for g in all_grids]
+    # list copies of elevation and friction, made once per set of grids rather
+    # than once per place (they are only read at patch edges)
+    tag = tuple((id(g.elevation), id(g.friction)) for g in all_grids)
+    cached = getattr(sim, "_nested_lists", None)
+    if cached is None or cached[0] != tag:
+        cached = (tag,
+                  [g.elevation.tolist() if g.elevation is not None else None for g in all_grids],
+                  [g.friction.tolist() if g.friction is not None else None for g in all_grids])
+        sim._nested_lists = cached
+    elev, fric = cached[1], cached[2]
     tc = sim.grid.terrain_cost
 
     def link_cost(frm: Tuple[int, int, int], to: Tuple[int, int, int]) -> float:
