@@ -5,14 +5,14 @@
    - Scene packs and the Python runtime are large and versioned by URL
      (?v=<build>), so they are served cache-first and never re-downloaded.
    - Google / Esri / OSM tiles stay on the network and are never stored. */
-const CACHE = "pedsim-field-v22";
+const CACHE = "pedsim-field-v23";
 const SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=22",
-  "./app.js?v=22",
-  "./worker.js?v=22",
-  "./strings.js?v=22",
+  "./styles.css?v=23",
+  "./app.js?v=23",
+  "./worker.js?v=23",
+  "./strings.js?v=23",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
@@ -48,7 +48,8 @@ self.addEventListener("fetch", function (event) {
   if (url.origin !== self.location.origin) return;
   if (event.request.method !== "GET") return;
   if (url.pathname.indexOf("/tiles/") >= 0 || url.pathname.indexOf("/api/") >= 0) return;
-  const heavy = /\/vendor\/|\/packs\/[^/]+\/[^/]+\.(bin|jpg)$|\/packs\/[^/]+\/(cluster|village-[^/]+)\.json$/
+  // pedsim.zip is the model itself: always ask the network first (below)
+  const heavy = !/\/vendor\/pedsim\.zip$/.test(url.pathname) && /\/vendor\/|\/packs\/[^/]+\/[^/]+\.(bin|jpg)$|\/packs\/[^/]+\/(cluster|village-[^/]+)\.json$/
     .test(url.pathname);
   if (heavy) {
     event.respondWith(caches.match(event.request).then(function (hit) {

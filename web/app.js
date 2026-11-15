@@ -31,9 +31,9 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v22";
+  const CACHE = "pedsim-field-v23";
   const ENGINE_FILES = [
-    "vendor/pedsim.zip",
+    "vendor/pedsim.zip?v=" + new URL(document.currentScript.src).searchParams.get("v"),
     "vendor/pyodide/pyodide.js",
     "vendor/pyodide/pyodide.asm.js",
     "vendor/pyodide/pyodide.asm.wasm",
@@ -90,7 +90,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=22");
+  const worker = new Worker("worker.js?v=23");
   const canvas = document.createElement("canvas");
   // Walls read from a plan (one pixel per cell, phase colours) are painted
   // into the same canvas as the density. A second canvas source would be the

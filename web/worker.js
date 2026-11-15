@@ -28,8 +28,11 @@ function boot() {
     status("boot", "numpy");
     await pyodide.loadPackage(["numpy", "pyyaml"]);
     status("boot", "pedsim");
-    // no-cache: revalidate, so an updated engine is never paired with an old page
-    const response = await fetch("vendor/pedsim.zip", { cache: "no-cache" });
+    // The model code changes with every pack build, so it must never come from
+    // an old copy: its address carries the page version, and the request asks
+    // the server to confirm it is current.
+    const version = new URL(self.location.href).searchParams.get("v") || "0";
+    const response = await fetch("vendor/pedsim.zip?v=" + version, { cache: "no-cache" });
     if (!response.ok) throw new Error("vendor/pedsim.zip missing — run python -m pedsim pack");
     pyodide.FS.mkdirTree("/app");
     pyodide.unpackArchive(await response.arrayBuffer(), "zip", { extractDir: "/app" });
