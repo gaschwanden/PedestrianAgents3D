@@ -477,7 +477,7 @@ it. There is no second agent model and nothing is played back.
 | `packs/goebekli/cluster.json` + `.bin` | the Taş Tepeler cluster: terrain on the 250 m grid, rivers, sites, and the solved routes for all three seasons |
 | `packs/goebekli/village-<site>.json` + `.bin` | one 2.5 km scene per site (all 18): 5 m cells with nested 1 m patches, and its solved routes |
 | `packs/goebekli/sat-<scene>.jpg` | Sentinel-2 cloudless 2016 (EOX, CC BY 4.0), 10 m pixels: the offline satellite basemap |
-| `packs/goebekli/osm-<scene>.geojson` | roads, tracks and place names from OpenStreetMap (ODbL), drawn over the basemap |
+| `packs/goebekli/osm-<scene>.geojson` | only with `pedsim pack --roads`: today's roads and place names from OpenStreetMap (ODbL), an orientation overlay the model does not read |
 | `packs/goebekli/basemap.jpg` | shaded relief rendered from the Copernicus DEM, the fallback basemap |
 | `vendor/pedsim.zip` | this package and `data/config`, for the in-browser engine |
 

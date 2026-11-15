@@ -278,8 +278,12 @@ def write_osm(root: str, name: str, bbox: Tuple[float, float, float, float],
 
 
 def write_scene_maps(root: str, scenes_index: list, village_margin_m: float = 1500.0,
-                     data_dir: Optional[str] = None, progress=None) -> dict:
-    """Satellite image and road overlay for every packed scene.
+                     data_dir: Optional[str] = None, progress=None,
+                     roads: bool = False) -> dict:
+    """Satellite image for every packed scene, and with ``roads`` a road overlay.
+
+    Roads and place names are today's, from OpenStreetMap: an orientation aid
+    in the field and nothing the model reads. They are off by default.
 
     ``scenes_index`` is the pack index's scene list (each row needs ``id``,
     ``scale`` and the scene's lon/lat ``bounds``). A scene whose download fails
@@ -301,10 +305,11 @@ def write_scene_maps(root: str, scenes_index: list, village_margin_m: float = 15
             zoom, detail = 14, True
         if progress:
             progress(f"maps for {row['label']}")
-        for kind, make in (
-            ("satellite", lambda: write_satellite(root, "sat-" + row["id"], bbox, zoom, data_dir)),
-            ("osm", lambda: write_osm(root, "osm-" + row["id"], bbox, detail, data_dir)),
-        ):
+        jobs = [("satellite",
+                 lambda: write_satellite(root, "sat-" + row["id"], bbox, zoom, data_dir))]
+        if roads:
+            jobs.append(("osm", lambda: write_osm(root, "osm-" + row["id"], bbox, detail, data_dir)))
+        for kind, make in jobs:
             try:
                 out[kind][row["id"]] = make()
             except Exception as error:      # no network, server busy: not fatal

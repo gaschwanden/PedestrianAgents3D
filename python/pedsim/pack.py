@@ -543,7 +543,7 @@ def write_engine_zip(path: str) -> str:
 
 def build_pack(area: str = "goebekli", out_dir: str = "", publish_web: bool = False,
                save_dir: str = "", sites_filter=None, progress=None,
-               maps: bool = True) -> str:
+               maps: bool = True, roads: bool = False) -> str:
     root = out_dir or os.path.join(package_root(), "data", "packs", area)
     os.makedirs(root, exist_ok=True)
     config = config_dir()
@@ -571,7 +571,8 @@ def build_pack(area: str = "goebekli", out_dir: str = "", publish_web: bool = Fa
         from .basemap import write_basemap, write_scene_maps
         index["basemap"] = write_basemap(root, progress=progress)
         if maps:
-            index["maps"] = write_scene_maps(root, index["scenes"], progress=progress)
+            index["maps"] = write_scene_maps(root, index["scenes"], progress=progress,
+                                             roads=roads)
         with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as fh:
             json.dump(index, fh, indent=1, ensure_ascii=False)
     manifest = {

@@ -31,7 +31,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v21";
+  const CACHE = "pedsim-field-v22";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -90,7 +90,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=21");
+  const worker = new Worker("worker.js?v=22");
   const canvas = document.createElement("canvas");
   // Walls read from a plan (one pixel per cell, phase colours) are painted
   // into the same canvas as the density. A second canvas source would be the
@@ -994,6 +994,8 @@
     if (!map || !state.mapReady || !state.index) return;
     const maps = state.index.maps || {};
     const entry = (maps.osm || {})[state.sceneId] || (maps.osm || {}).cluster;
+    // the control only makes sense when the pack was built with roads
+    document.getElementById("roads").parentNode.hidden = !entry;
     const show = document.getElementById("roads").checked && entry;
     map.getSource("osm").setData(show
       ? PACK + entry.file + "?v=" + state.index.build
