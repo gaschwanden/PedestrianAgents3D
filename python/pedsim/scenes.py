@@ -163,10 +163,16 @@ def _synthetic_relief(bounds, cellsize: float) -> Topography:
 
 # --------------------------------------------------------------------- village
 def village_scene(site_name: str, data_dir: str = DATA_DIR,
-                  extent_m: float = 600.0, cellsize: float = 2.0,
+                  extent_m: float = 2500.0, cellsize: float = 5.0,
                   num_agents: int = 250, seed: Optional[int] = 3,
-                  progress=None) -> Simulation:
-    """A single settlement at village scale.
+                  progress=None, fine: Optional[float] = 1.0) -> Simulation:
+    """A single settlement and the land around it.
+
+    The scene is ``extent_m`` across on a ``cellsize`` grid, which is coarse:
+    most of that land is open ground. ``fine`` turns on nested grids
+    (:mod:`pedsim.nested`), so buildings, walls, marked places and rivers get
+    cells of that size, where a doorway is a doorway. ``fine=None`` gives a
+    plain single grid.
 
     The terrain is a high-resolution crop of the same DEM around the site, which
     is honest but nearly flat at this extent -- at village scale the obstacles
@@ -197,14 +203,14 @@ def village_scene(site_name: str, data_dir: str = DATA_DIR,
     # the cluster-scale routes have somewhere to arrive.
     from .od import OD
 
-    r = half * 0.86
+    r = min(half * 0.86, 520.0)       # gates ring the settlement, not the whole scene
     ods = []
     for i, ang in enumerate(np.linspace(0.0, 2.0 * np.pi, 7)[:-1]):
         ods.append(OD(float(r * np.cos(ang)), float(r * np.sin(ang)),
                       group=i % 3, origin_weight=1.0, dest_weight=1.0,
                       name=f"gate {i + 1}"))
     ods.append(OD(0.0, 0.0, group=0, origin_weight=0.4, dest_weight=1.5,
-                  name="centre"))
+                  name="centre", kind="special"))
 
     sim = Simulation(
         bounds=bounds, ods=ods, gridsize=cellsize, topography=topo,
@@ -213,6 +219,10 @@ def village_scene(site_name: str, data_dir: str = DATA_DIR,
         num_groups=3, seed=seed,
     )
     sim.respawn_at_origin = True
+    if fine:
+        from .nested import NestedConfig
+
+        sim.set_nested(NestedConfig(fine=fine, tile=10.0 * cellsize, margin=3.0 * cellsize))
     sim.frame = frame
     sim.scene_scale = Scale.SITE
     sim.position_quality = where[2]

@@ -42,6 +42,9 @@ class Agent:
         self.home = -1
         self.origin = -1
         self.target = -1
+        #: Which grid this walker is on: 0 is the scene's own grid, k > 0 the
+        #: k-th fine patch of a nested scene (see :mod:`pedsim.nested`).
+        self.level = 0
         self.px = 0.0
         self.py = 0.0
         self.vx = 0.0
@@ -57,6 +60,13 @@ class Agent:
         self.load_kg = 0.0
         self.speed_factor = 1.0
         self.day_minutes_used = 0.0
+
+    @property
+    def grid(self):
+        """The grid this walker is on."""
+        if self.level == 0:
+            return self.sim.grid
+        return self.sim.patches[self.level - 1].grid
 
     # --------------------------------------------------------------- lifecycle
     def die(self, reason: int) -> None:
@@ -90,12 +100,15 @@ class Agent:
             if assigned is None:
                 return False
             o, d = assigned
-        grid = sim.grid
         self.origin = o
         self.home = o
         self.target = d
         self.group = sim.ods[o].group
         self._apply_class_speed()
+        if sim.patches:
+            from .nested import level_at
+            self.level = level_at(sim, sim.ods[o].x, sim.ods[o].y)
+        grid = self.grid
         self.px = (sim.ods[o].x - grid.sx) / grid.gridsize
         self.py = (sim.ods[o].y - grid.sy) / grid.gridsize
         self.vx = 0.0
@@ -142,7 +155,7 @@ class Agent:
         """Scan the flood-fill along a cone of straight sight-lines and choose a
         far waypoint, weighted towards the longest clear line of sight."""
         sim = self.sim
-        grid = sim.grid
+        grid = self.grid
         self.far_px = -1
         self.far_py = -1
         cost = grid.cost_field(self.target)
@@ -213,7 +226,7 @@ class Agent:
         """Set velocity toward the far pixel; fall back to a local neighbour
         search of the cost field, else give up."""
         sim = self.sim
-        grid = sim.grid
+        grid = self.grid
         cost = grid.cost_field(self.target)
         if cost is None:
             return
@@ -262,7 +275,7 @@ class Agent:
             self.die(DIED_LOST)
 
     def move(self) -> None:
-        grid = self.sim.grid
+        grid = self.grid
         mag = math.hypot(self.vx, self.vy)
         if mag > 0:
             self.px += self.vx / mag * self.speed
@@ -273,7 +286,7 @@ class Agent:
 
     def mark_occupancy(self) -> None:
         sim = self.sim
-        grid = sim.grid
+        grid = self.grid
         if self.age < 2:
             return
         xx = min(max(int(self.px), 0), grid.nx - 1)
@@ -293,12 +306,16 @@ class Agent:
 
     def target_check(self) -> None:
         sim = self.sim
-        grid = sim.grid
+        grid = self.grid
         if self.target < 0 or self.target >= len(sim.ods) or sim.ods[self.target] is None:
             self.die(DIED_TARGET_GONE)
             self.renew()
             return
         od = sim.ods[self.target]
+        if sim.patches:
+            from .nested import level_at
+            if level_at(sim, od.x, od.y) != self.level:
+                return          # the place is on another grid: not there yet
         odpx = grid.cell_x(od.x)
         odpy = grid.cell_y(od.y)
         if abs(self.px - odpx) < 3 and abs(self.py - odpy) < 3:

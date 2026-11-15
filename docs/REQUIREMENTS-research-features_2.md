@@ -480,7 +480,7 @@ Travel cost from the stock Tobler solver is in equivalent flat metres when `Terr
 
 ## 17. Implementation status (v1.1)
 
-Package version 0.6.0. Tests live in `python/tests/test_research.py`, `python/tests/test_outputs.py` and `python/tests/test_live.py`. The protocol text is `docs/ODD.md`, regenerated with `python -m pedsim.scenario --odd`.
+Package version 0.7.0. Tests live in `python/tests/test_research.py`, `python/tests/test_outputs.py` and `python/tests/test_live.py`. The protocol text is `docs/ODD.md`, regenerated with `python -m pedsim.scenario --odd`.
 
 | Area | What ships |
 |---|---|
@@ -498,8 +498,11 @@ Added on 2026-11-13 (v0.5): all 17 sites are placed, the four without a usable c
 
 Added on 2026-11-14 (v0.6): the Göbeklitepe southeast hollow is imported from the 2024 phase plan (Clare 2024, Fig. 4) as phased wall layers (`pedsim.gobekli_plan`; C16 for one site); layers can carry `phase_ids`; Clare (2024) Figs 26-28 supply period attributions, the Mendiktepe and Kocanizam working positions and the choice of Sefertepe's position. Decision 1 in section 15 (classic Layer III / II) is superseded for this scene by the plate's eight phases, whose dates are assumptions.
 
+Added on 2026-11-15 (v0.7): nested grids (`pedsim.nested`). Village scenes are 2.5 km at 5 m with 1 m patches around buildings, walls, places and rivers; one Dijkstra spans both levels. The field page can lay an imported image on the ground and stretch it by its corners.
+
 These items are specified and only partly built:
 
+- Tracks are not model features yet: the OpenStreetMap roads are drawn but do not attract walkers or get fine ground. Marked areas exist in the model (`NestedConfig.marked`) but have no drawing tool in the field page.
 - Village scenes carry terrain and gates only, except the Göbeklitepe plan scene. No wall plan is imported for any site yet; plans are georeferenced with `pedsim.plans` when the drawings are supplied.
 - Village terrain is the 30 m DEM interpolated to 3 m (`geo.load_dem(interpolate=...)`). Before v0.4 it was sampled as a staircase, which put artificial cliffs every 30 m.
 - A phone needs an https address to install the page and use GPS. `scripts/publish_field.sh` publishes `web/` to GitHub Pages by hand after `pedsim pack`; CI cannot build the pack because the DEM is not in the repository.

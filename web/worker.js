@@ -76,6 +76,12 @@ function sendFrame(snapshot, ms, steps) {
   frame.agents = agents;
   frame.groups = groups;
   if (frame.walls) frame.walls = new Uint8ClampedArray(frame.walls.slice().buffer);
+  if (frame.patches) {
+    // fine patches of a nested scene, each with its own picture
+    frame.patches.forEach(function (patch) {
+      patch.field = new Float32Array(patch.field.slice().buffer);
+    });
+  }
   frame.ids = ids;
   frame.ages = ages;
   frame.field = field;

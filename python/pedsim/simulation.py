@@ -93,6 +93,15 @@ class Simulation:
         #: "what if relief or water mattered more". 1.0 is the scene as built.
         self.terrain_weight = 1.0
         self.river_weight = 1.0
+        #: Nested grids (:mod:`pedsim.nested`): a ``NestedConfig`` turns the
+        #: scene's grid into the coarse level and adds fine patches around its
+        #: features. ``None`` (default) is an ordinary single-grid scene.
+        self.nested = None
+        #: Set while several edits are made in a row, so routes are solved once
+        #: at the end (``hold_routes`` / ``release_routes``) and not after each.
+        self._routes_held = False
+        self.patches: list = []
+        self.nested_notes: List[str] = []
         self.ods: List[Optional[OD]] = list(ods)
         self.buildings: List[Building] = [_to_building(b, "building") for b in (buildings or [])]
         self.obstacles: List[Building] = [_to_building(o, "obstacle", 0.0) for o in (obstacles or [])]
@@ -164,6 +173,8 @@ class Simulation:
 
     def reset_analysis(self) -> None:
         self.grid.reset_analysis()
+        for patch in self.patches:
+            patch.grid.reset_analysis()
         self.traces = []
         for a in self.agents:
             a.die(0)
@@ -269,13 +280,42 @@ class Simulation:
     def _active_ods(self) -> List[Tuple[int, OD]]:
         return [(k, od) for k, od in enumerate(self.ods) if od is not None]
 
+    def hold_routes(self) -> None:
+        self._routes_held = True
+
+    def release_routes(self) -> None:
+        self._routes_held = False
+        self._build_cost_fields()
+
     def _build_cost_fields(self) -> None:
-        self.grid.clear_cost_fields()
+        if self._routes_held:
+            return
         ready = {}
+        if self.nested is not None:
+            from . import nested
+            nested.rebuild(self)
+            if self.cost_field_provider is not None:
+                ready = self.cost_field_provider(self) or {}
+            all_grids = nested.grids(self)
+            for g in all_grids:
+                g.clear_cost_fields()
+            for k, od in self._active_ods():
+                fields = ready.get(k)
+                # a packed nested field is one array per grid, coarse first
+                if (isinstance(fields, (list, tuple)) and len(fields) == len(all_grids)
+                        and all(f.shape == (g.nx, g.ny) for f, g in zip(fields, all_grids))):
+                    for f, g in zip(fields, all_grids):
+                        g._cost_fields[k] = f
+                else:
+                    nested.solve(self, k, od.x, od.y)
+            return
+        self.grid.clear_cost_fields()
         if self.cost_field_provider is not None:
             ready = self.cost_field_provider(self) or {}
         for k, od in self._active_ods():
             field = ready.get(k)
+            if isinstance(field, (list, tuple)):
+                field = field[0] if field else None
             if field is not None and field.shape == (self.grid.nx, self.grid.ny):
                 self.grid._cost_fields[k] = field
             else:
@@ -384,6 +424,8 @@ class Simulation:
 
     def note_category(self, i: int, j: int, agent) -> None:
         """Split occupancy by task and by population class, on demand."""
+        if getattr(agent, "level", 0):
+            return        # per-task and per-class splits are kept on the scene's own grid
         keys = []
         if getattr(agent, "task", ""):
             keys.append(f"task:{agent.task}")
@@ -551,9 +593,42 @@ class Simulation:
                     a.home = -1
             self._home_signature = sig
 
+    def _solve_od(self, k: int) -> None:
+        """(Re)solve the route field of one place."""
+        if self._routes_held:
+            return
+        od = self.ods[k]
+        if self.nested is not None:
+            from . import nested
+            # a new place may need fine ground of its own
+            wanted, _ = nested.wanted_tiles(self)
+            if wanted != set(getattr(self, "_nested_tiles", {})):
+                self._build_cost_fields()
+            else:
+                nested.solve(self, k, od.x, od.y)
+            return
+        self.grid.compute_cost_field(k, od.x, od.y, self.rng)
+
+    def set_nested(self, config) -> None:
+        """Turn nested grids on (a ``pedsim.nested.NestedConfig``) or off (``None``)."""
+        self.nested = config
+        for a in self.agents:
+            a.active = False
+            a.level = 0
+        if config is None:
+            self.patches = []
+            self.grid.hole_mask = None
+            self.grid._rebuild_walkable()
+            self._nested_tiles = {}
+        self._build_cost_fields()
+
     def step(self) -> None:
         if self.respawn_at_origin:
             self._check_homes()
+        if self.patches:
+            from . import nested
+            nested.step(self)
+            return
         if self.batch_vision:
             from .vision import scan_all
             scan_all(self)
@@ -608,24 +683,26 @@ class Simulation:
         for i, existing in enumerate(self.ods):
             if existing is None:
                 self.ods[i] = od
-                self.grid.compute_cost_field(i, x, y, self.rng)
+                self._solve_od(i)
                 return i
         self.ods.append(od)
         k = len(self.ods) - 1
-        self.grid.compute_cost_field(k, x, y, self.rng)
+        self._solve_od(k)
         return k
 
     def delete_od(self, index: int) -> None:
         if 0 <= index < len(self.ods):
             self.ods[index] = None
             self.grid._cost_fields.pop(index, None)
+            for patch in self.patches:
+                patch.grid._cost_fields.pop(index, None)
 
     def move_od(self, index: int, x: float, y: float) -> None:
         od = self.ods[index]
         if od is None:
             return
         od.x, od.y = x, y
-        self.grid.compute_cost_field(index, x, y, self.rng)
+        self._solve_od(index)
 
     def weight_od(self, index: int, origin_weight: Optional[float] = None,
                   dest_weight: Optional[float] = None) -> None:
@@ -964,7 +1041,7 @@ class Simulation:
 
     # --------------------------------------------------------------- snapshot
     def agent_positions_world(self) -> np.ndarray:
-        pts = [(self.grid.world_x(a.px), self.grid.world_y(a.py)) for a in self.active_agents]
+        pts = [(a.grid.world_x(a.px), a.grid.world_y(a.py)) for a in self.active_agents]
         return np.array(pts, dtype=float) if pts else np.empty((0, 2))
 
 

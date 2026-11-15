@@ -31,7 +31,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v20";
+  const CACHE = "pedsim-field-v21";
   const ENGINE_FILES = [
     "vendor/pedsim.zip",
     "vendor/pyodide/pyodide.js",
@@ -90,7 +90,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=20");
+  const worker = new Worker("worker.js?v=21");
   const canvas = document.createElement("canvas");
   // Walls read from a plan (one pixel per cell, phase colours) are painted
   // into the same canvas as the density. A second canvas source would be the
@@ -365,20 +365,13 @@
     ];
   }
 
-  function paint() {
-    const frame = state.frame;
-    if (!frame || !map || !map.getLayer("density")) return;
-    const nx = frame.nx;
-    const ny = frame.ny;
-    const field = frame.field;
-    const channels = frame.channels || 1;
-    if (canvas.width !== nx || canvas.height !== ny) {
-      canvas.width = nx;
-      canvas.height = ny;
-    }
-    const ctx = canvas.getContext("2d");
-    const image = ctx.createImageData(nx, ny);
-    const max = frame.max || 0;
+  // Offscreen sheets for a nested scene: the coarse picture and one patch at a
+  // time are toned at their own resolution, then drawn scaled into the one
+  // canvas the map shows.
+  const coarseSheet = document.createElement("canvas");
+  const patchSheet = document.createElement("canvas");
+
+  function toneInto(image, field, nx, ny, channels, max) {
     const cutoff = Number(document.getElementById("cutoff").value) * max;
     const useLog = document.getElementById("log").checked;
     const size = nx * ny;
@@ -411,6 +404,63 @@
         image.data[pixel + 3] = Math.round(90 + 150 * top);
       }
     }
+  }
+
+  function sheetFor(sheet, field, nx, ny, channels, max) {
+    if (sheet.width !== nx || sheet.height !== ny) {
+      sheet.width = nx;
+      sheet.height = ny;
+    }
+    const ctx = sheet.getContext("2d");
+    const image = ctx.createImageData(nx, ny);
+    toneInto(image, field, nx, ny, channels, max);
+    ctx.putImageData(image, 0, 0);
+    return sheet;
+  }
+
+  function paint() {
+    const frame = state.frame;
+    if (!frame || !map || !map.getLayer("density")) return;
+    const nx = frame.nx;
+    const ny = frame.ny;
+    const channels = frame.channels || 1;
+    const max = frame.max || 0;
+    const patches = frame.patches || [];
+    if (patches.length) {
+      // Nested scene. The canvas is the coarse picture enlarged so that a
+      // fine cell is about a pixel, within what a phone can hold as a texture.
+      const ratio = Math.max(1, Math.round((state.desc && state.desc.nested
+        ? state.desc.grid.gridsize / state.desc.nested.fine : 1)));
+      const scale = Math.max(1, Math.min(ratio, Math.floor(2048 / Math.max(nx, ny))));
+      const width = nx * scale;
+      const height = ny * scale;
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(sheetFor(coarseSheet, frame.field, nx, ny, channels, max), 0, 0, width, height);
+      patches.forEach(function (patch) {
+        const x = Math.round(patch.x0 * width);
+        const y = Math.round(patch.y0 * height);
+        const w = Math.round(patch.x1 * width) - x;
+        const h = Math.round(patch.y1 * height) - y;
+        ctx.clearRect(x, y, w, h);
+        ctx.drawImage(sheetFor(patchSheet, patch.field, patch.nx, patch.ny, channels, max), x, y, w, h);
+      });
+      map.setPaintProperty("density", "raster-opacity", Number(document.getElementById("opacity").value));
+      map.triggerRepaint();
+      return;
+    }
+    if (canvas.width !== nx || canvas.height !== ny) {
+      canvas.width = nx;
+      canvas.height = ny;
+    }
+    const ctx = canvas.getContext("2d");
+    const image = ctx.createImageData(nx, ny);
+    toneInto(image, frame.field, nx, ny, channels, max);
     const walls = state.walls;
     if (walls) {
       // over the heat, fully opaque, whatever the analysis mode
@@ -627,6 +677,9 @@
         },
       };
     }));
+    setData("patches", ((desc.nested && desc.nested.rings) || []).map(function (ring) {
+      return { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: ring } };
+    }));
     setData("doors", (desc.buildings || []).filter(function (building) {
       return building.active && building.door;
     }).map(function (building) { return featurePoint(building.door, {}); }));
@@ -727,6 +780,11 @@
     const desc = state.desc;
     if (!desc) return;
     const lines = [desc.name + " · " + desc.grid.nx + "×" + desc.grid.ny + " cells of " + desc.grid.gridsize + " m"];
+    if (desc.nested) {
+      lines.push("fine ground: " + desc.nested.patches + " patches of " + desc.nested.fine
+        + " m cells (" + desc.nested.fine_cells + " cells)");
+      (desc.nested.notes || []).forEach(function (note) { lines.push("  " + note); });
+    }
     if (desc.note) lines.push(desc.note);
     (desc.hud || []).forEach(function (line) { lines.push(line); });
     lines.push("season: " + frame.season + (frame.daylight ? " · " + frame.daylight + " min daylight" : ""));
@@ -1038,6 +1096,12 @@
             "fill-extrusion-opacity": 0.88,
             "fill-extrusion-vertical-gradient": true,
           },
+        });
+        // where the ground is fine-celled in a nested scene
+        map.addSource("patches", { type: "geojson", data: empty });
+        map.addLayer({
+          id: "patches", type: "line", source: "patches",
+          paint: { "line-color": "#ffffff", "line-width": 1, "line-opacity": 0.5, "line-dasharray": [2, 2] },
         });
         map.addSource("doors", { type: "geojson", data: empty });
         map.addLayer({

@@ -475,7 +475,7 @@ it. There is no second agent model and nothing is played back.
 | File | What it is |
 | --- | --- |
 | `packs/goebekli/cluster.json` + `.bin` | the Taş Tepeler cluster: terrain on the 250 m grid, rivers, sites, and the solved routes for all three seasons |
-| `packs/goebekli/village-<site>.json` + `.bin` | one 600 m village per site (all 18), at 2 m cells, with its solved routes |
+| `packs/goebekli/village-<site>.json` + `.bin` | one 2.5 km scene per site (all 18): 5 m cells with nested 1 m patches, and its solved routes |
 | `packs/goebekli/sat-<scene>.jpg` | Sentinel-2 cloudless 2016 (EOX, CC BY 4.0), 10 m pixels: the offline satellite basemap |
 | `packs/goebekli/osm-<scene>.geojson` | roads, tracks and place names from OpenStreetMap (ODbL), drawn over the basemap |
 | `packs/goebekli/basemap.jpg` | shaded relief rendered from the Copernicus DEM, the fallback basemap |
@@ -579,6 +579,25 @@ period attributions for sites with no date of their own (marked "possible"),
 a working position for Mendiktepe and for the newly added Kocanizam read off
 the EPPNB map (about 0.5 km), and the choice between Sefertepe's two published
 positions (the map agrees with the second).
+
+**Nested grids: 2.5 km around each site.** A village scene is now 2.5 km
+across on 5 m cells, with 1 m cells laid over whatever needs them
+(`pedsim.nested`): 50 m tiles around buildings and walls, around every place
+that is not a perimeter gate, along rivers, and over any rectangle listed in
+`NestedConfig.marked`. Adding a building or a place makes its fine ground.
+One route solve runs across both levels, so a path can enter a patch, pass a
+1 m doorway and leave again. Things to know:
+
+- a walker sees only its own grid, so sight-lines end at a patch edge;
+- a fine walker takes five 1 m-scale steps per tick, a coarse one a single
+  5 m-scale step, so both cover the same ground per tick;
+- fine cells are capped (`max_fine_cells`, 800,000); what does not fit stays
+  coarse and the scene says so;
+- the packed routes of these scenes are single precision to keep the download
+  down, so a packed village no longer replays bit for bit like the laptop one
+  (the cluster and the plan scene still do);
+- `village_scene(..., extent_m=5000)` gives 5 km; routes then take about four
+  times as long to solve. `fine=None` gives a plain single grid.
 
 **What is not in a village scene yet.** Villages other than the Göbeklitepe
 plan are real terrain with six perimeter gates and a centre. Walls and buildings come from a georeferenced

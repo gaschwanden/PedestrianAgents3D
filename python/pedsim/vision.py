@@ -40,7 +40,11 @@ def _cost_stack(grid):
 
 def scan_all(sim) -> None:
     """Run the vision scan for every active agent. Sets ``far_px``/``far_py``."""
-    grid = sim.grid
+    scan(sim, sim.grid, sim.agents)
+
+
+def scan(sim, grid, walkers) -> None:
+    """The scan for ``walkers``, all of whom are on ``grid``."""
     nx, ny = grid.nx, grid.ny
     cone = int(sim.cone_vision)
     stack, slot = _cost_stack(grid)
@@ -52,7 +56,7 @@ def scan_all(sim) -> None:
     cos_all: List[float] = []
     sin_all: List[float] = []
     owner: List[int] = []
-    for a in sim.agents:
+    for a in walkers:
         if not a.active:
             continue
         a.far_px = -1

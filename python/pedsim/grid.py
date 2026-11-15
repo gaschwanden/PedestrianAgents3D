@@ -97,6 +97,9 @@ class NavGrid:
         self._layers_version = -1
         self._combine_layers()
 
+        #: Cells of this grid that a finer patch grid has taken over. ``None``
+        #: for an ordinary single grid.
+        self.hole_mask: Optional[np.ndarray] = None
         self.permablocked = np.zeros((self.nx, self.ny), dtype=bool)
         self.openspace = np.ones((self.nx, self.ny), dtype=bool)
         self.boundary = np.zeros((self.nx, self.ny), dtype=bool)
@@ -231,6 +234,9 @@ class NavGrid:
         self.walkable = self.openspace & (~self.permablocked)
         if self.extra_blocked is not None:
             self.walkable &= ~self.extra_blocked
+        if self.hole_mask is not None:
+            # cells handed over to a finer patch grid (see pedsim.nested)
+            self.walkable &= ~self.hole_mask
         self._compute_boundary()
 
     def _block_wall(self, b) -> None:
@@ -320,6 +326,9 @@ class NavGrid:
         self.walkable = self.openspace & (~self.permablocked)
         if self.extra_blocked is not None:
             self.walkable &= ~self.extra_blocked
+        if self.hole_mask is not None:
+            # cells handed over to a finer patch grid (see pedsim.nested)
+            self.walkable &= ~self.hole_mask
         self._compute_boundary()
 
     # -------------------------------------------------------------- transforms

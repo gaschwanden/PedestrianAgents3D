@@ -57,7 +57,7 @@ ANALYSIS_BY_NAME = {
 SEASON_MONTH = {"dry": 8, "normal": 5, "spring floods": 3}
 
 #: Largest side of the density image sent to the client.
-MAX_FIELD_SIDE = 320
+MAX_FIELD_SIDE = 640
 
 
 # ---------------------------------------------------------------- georeference
@@ -200,12 +200,14 @@ def pack_scene(sim: Simulation, scene_id: str, name: str, scale: str,
                frame: BilinearFrame, site: str = "", zoom: float = 16.0,
                sites: Optional[List[dict]] = None,
                cost_seasons: Optional[Sequence[Season]] = None,
-               note: str = "") -> Tuple[dict, bytes]:
+               note: str = "", cost_dtype: str = "<f8") -> Tuple[dict, bytes]:
     """Describe ``sim`` so :class:`LiveEngine` can rebuild it without geodata.
 
     Returns ``(meta, blob)``. ``cost_seasons`` lists the seasons whose cost
     fields are solved now and shipped; the simulation is left in the season it
-    came in with.
+    came in with. ``cost_dtype`` ``"<f4"`` halves the size of the packed routes;
+    the scene then no longer replays bit for bit like its source, because a
+    walker choosing between two nearly equal routes may tip the other way.
     """
     grid = sim.grid
     blob = _Blob()
@@ -232,13 +234,17 @@ def pack_scene(sim: Simulation, scene_id: str, name: str, scale: str,
             sim.set_season(season)
         key = cost_key(sim)
         costs[key] = {}
+        levels = [grid] + [p.grid for p in sim.patches]
         for k, od in sim._active_ods():
-            field = grid.cost_field(k)
-            if field is None:
+            if any(g.cost_field(k) is None for g in levels):
                 continue
-            entry = f"cost/{key}/{k}"
-            blob.add(entry, field)
-            costs[key][str(k)] = entry
+            names = []
+            for n, g in enumerate(levels):
+                entry = f"cost/{key}/{k}" + (f"/{n}" if n else "")
+                blob.add(entry, g.cost_field(k), dtype=cost_dtype)
+                names.append(entry)
+            # one array for a single grid, a list (coarse first) for a nested scene
+            costs[key][str(k)] = names if sim.nested is not None else names[0]
     if sim.season != home:
         sim.set_season(home)
 
@@ -273,6 +279,11 @@ def pack_scene(sim: Simulation, scene_id: str, name: str, scale: str,
             "tau": r.tau, "undated_policy": r.undated_policy,
         },
         "geometry": sim.geometry_dict(),
+        "nested": None if sim.nested is None else {
+            "fine": sim.nested.fine, "tile": sim.nested.tile, "margin": sim.nested.margin,
+            "rivers": sim.nested.rivers, "max_fine_cells": sim.nested.max_fine_cells,
+            "marked": [list(r) for r in sim.nested.marked],
+        },
         "layers": layers,
         "sites": sites or [],
         "arrays": blob.index,
@@ -302,7 +313,11 @@ def build_simulation(meta: dict, blob=None, use_packed_costs: bool = True,
     store: Dict[str, Dict[int, np.ndarray]] = {}
     if use_packed_costs and blob is not None:
         for key, entries in meta.get("costs", {}).items():
-            store[key] = {int(k): _read(blob, arrays[name]) for k, name in entries.items()}
+            store[key] = {
+                int(k): ([_read(blob, arrays[n]) for n in name] if isinstance(name, list)
+                         else _read(blob, arrays[name]))
+                for k, name in entries.items()
+            }
 
     state = {"store": store, "valid": set(), "pristine": True, "ready": False,
              "default": next(iter(store), None)}
@@ -370,6 +385,13 @@ def build_simulation(meta: dict, blob=None, use_packed_costs: bool = True,
         # walls change what is walkable; the routes still come from the pack
         sim.grid.refresh_layers(force=True)
         sim._build_cost_fields()
+    if meta.get("nested"):
+        from .nested import NestedConfig
+
+        cfg = dict(meta["nested"])
+        cfg["marked"] = [tuple(r) for r in cfg.get("marked", [])]
+        sim.nested = NestedConfig(**cfg)
+        sim._build_cost_fields()        # patches rebuilt here; routes from the pack
     sim.pack_seed = seed
     sim.respawn_at_origin = respawn
     sim._packed_research = (phases, geo, meta.get("research", {}))
@@ -543,6 +565,14 @@ class LiveEngine:
             "center": [float(clon), float(clat)],
             "zoom": self.meta.get("zoom", 16),
             "grid": {"nx": sim.grid.nx, "ny": sim.grid.ny, "gridsize": sim.grid.gridsize},
+            "nested": None if sim.nested is None else {
+                "fine": sim.nested.fine, "patches": len(sim.patches),
+                "fine_cells": int(sum(p.grid.nx * p.grid.ny for p in sim.patches)),
+                "notes": list(sim.nested_notes),
+                "rings": [self._ring([(p.bounds[0], p.bounds[1]), (p.bounds[2], p.bounds[1]),
+                                      (p.bounds[2], p.bounds[3]), (p.bounds[0], p.bounds[3])])
+                          for p in sim.patches],
+            },
             "phases": [
                 {"id": p.id, "name": p.name, "start_bc": p.start_bc, "end_bc": p.end_bc,
                  "colour": p.colour, "confidence": p.confidence,
@@ -625,10 +655,12 @@ class LiveEngine:
         grid = sim.grid
         act = sim.active_agents
         if act:
-            px = np.fromiter((a.px for a in act), dtype=float, count=len(act))
-            py = np.fromiter((a.py for a in act), dtype=float, count=len(act))
-            lon, lat = self.frame.to_lonlat(grid.sx + px * grid.gridsize,
-                                            grid.sy + py * grid.gridsize)
+            # each walker is on its own grid (a nested scene has several)
+            wx = np.fromiter((a.grid.sx + a.px * a.grid.gridsize for a in act),
+                             dtype=float, count=len(act))
+            wy = np.fromiter((a.grid.sy + a.py * a.grid.gridsize for a in act),
+                             dtype=float, count=len(act))
+            lon, lat = self.frame.to_lonlat(wx, wy)
             agents = np.column_stack([lon, lat]).astype("<f8")
             groups = np.fromiter((a.group for a in act), dtype="<u1", count=len(act))
             slot = {id(a): k for k, a in enumerate(sim.agents)}
@@ -640,16 +672,31 @@ class LiveEngine:
             ids = np.zeros((0,), dtype="<u2")
             ages = np.zeros((0,), dtype="<u2")
 
-        channels = 1
-        if self.analysis == "facade":
-            field = np.where(grid.boundary, grid.visibility, 0.0)[None]
-        elif self.analysis == "facadeO":
-            vis = np.where(grid.boundary[:, :, None], grid.visibility_o, 0.0)
-            field = np.moveaxis(vis, 2, 0)[:3]
-            channels = field.shape[0]
-        else:
+        field = self._grid_field(grid)
+        if self.analysis not in ("facade", "facadeO"):
             field = sim.display_occupancy()[0][None]
+        channels = field.shape[0]
         image = self._image(field)
+        patches = []
+        peak = float(image.max()) if image.size else 0.0
+        if sim.patches:
+            g = grid
+            width = g.nx * g.gridsize
+            height = g.ny * g.gridsize
+            for patch in sim.patches:
+                # a fine walker marks ``ratio`` cells a tick where a coarse one
+                # marks one: scale so both read as walkers per tick
+                picture = np.transpose(self._grid_field(patch.grid) / sim.nested_ratio,
+                                       (0, 2, 1))[:, ::-1, :]
+                peak = max(peak, float(picture.max()) if picture.size else 0.0)
+                b = patch.bounds
+                patches.append({
+                    # where it sits in the scene picture, as fractions from the top left
+                    "x0": (b[0] - g.min_x) / width, "x1": (b[2] - g.min_x) / width,
+                    "y0": 1.0 - (b[3] - g.min_y) / height, "y1": 1.0 - (b[1] - g.min_y) / height,
+                    "nx": int(picture.shape[2]), "ny": int(picture.shape[1]),
+                    "field": np.ascontiguousarray(picture).astype("<f4").tobytes(),
+                })
         out = {
             "type": "frame",
             "scene": self.meta["id"],
@@ -665,11 +712,13 @@ class LiveEngine:
             "channels": channels,
             "nx": int(image.shape[2]), "ny": int(image.shape[1]),
             "field": image.astype("<f4").tobytes(),
-            "max": float(image.max()) if image.size else 0.0,
+            "max": peak,
             "season": sim.season.value,
             "daylight": round(float(sim.research.daylight_minutes), 1),
             "version": self.version,
         }
+        if patches:
+            out["patches"] = patches
         if self.analysis in ("traces", "tracesO"):
             out["traces"] = self._traces()
         if self._isovist is not None:
@@ -683,6 +732,15 @@ class LiveEngine:
                 out["walls_ny"] = int(walls.shape[0])
             self._sent_version = self.version
         return out
+
+    def _grid_field(self, grid) -> np.ndarray:
+        """``(c, nx, ny)`` of what the current analysis mode shows on one grid."""
+        if self.analysis == "facade":
+            return np.where(grid.boundary, grid.visibility, 0.0)[None]
+        if self.analysis == "facadeO":
+            vis = np.where(grid.boundary[:, :, None], grid.visibility_o, 0.0)
+            return np.moveaxis(vis, 2, 0)[:3]
+        return grid.occupancy[None]
 
     def _image(self, field: np.ndarray) -> np.ndarray:
         """``(c, nx, ny)`` grid arrays -> ``(c, rows, cols)`` with north on top."""
@@ -894,10 +952,20 @@ class LiveEngine:
             # put the opening on the wall line itself, wherever the tap landed
             gate = _nearest_on_ring(pts, gate)
         self._routing_edited()
+        # the building and its place are one edit: solve the routes once, after both
+        sim.hold_routes()
         sim.add_building(pts, height=height, function=function, phase_ids=phase_ids,
                          wall_m=wall_m, door=gate if wall_m is not None else None)
+        if sim.nested is not None:
+            from . import nested as _nested
+            _nested.rebuild(sim)            # so "is the room walkable" asks the fine grid
         name = f"house {len(sim.buildings)}"
         grid = sim.grid
+        if sim.patches:
+            from .nested import level_at
+            level = level_at(sim, cx, cy)
+            if level:
+                grid = sim.patches[level - 1].grid
         inside = grid.is_walkable(grid.cell_x(cx), grid.cell_y(cy)) and wall_m is not None
         if inside:
             spot = (cx, cy)
@@ -913,6 +981,7 @@ class LiveEngine:
             k = sim.add_od(spot[0], spot[1], origin_weight=1.0, dest_weight=1.0,
                            kind="house", name=name, phase_ids=phase_ids)
             self._od_edited(k)
+        sim.release_routes()
         self._touch()
         return len(sim.buildings) - 1
 

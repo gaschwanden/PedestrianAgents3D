@@ -411,7 +411,7 @@ def _saved_geometry(save_dir: str, name: str) -> str:
 
 
 def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
-                    village_extent: float = 600.0, village_cell: float = 2.0,
+                    village_extent: float = 2500.0, village_cell: float = 5.0,
                     cluster_cell: float = 250.0, progress=None) -> dict:
     """Pack the cluster and one village per usable site for the live engine.
 
@@ -481,8 +481,11 @@ def write_live_pack(root: str, sites_filter=None, save_dir: str = "",
                  if walls else "Terrain and perimeter gates only: no wall plan imported yet.")
         row = _write_live(
             root, sim, "village-" + _slug(site.name), site.name, "village", frame,
-            site=site.name, zoom=16.0, sites=[r for r in rows if r["name"] == site.name],
+            site=site.name, zoom=14.5, sites=[r for r in rows if r["name"] == site.name],
             note=note,
+            # 2.5 km of 5 m cells is a quarter of a million per place: single
+            # precision keeps the pack downloadable, at the price of exact replay
+            cost_dtype="<f4",
         )
         row["confidence"] = conf
         index["scenes"].append(row)

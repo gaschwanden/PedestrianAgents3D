@@ -33,7 +33,7 @@ class Trace:
 
     def update(self, sim) -> None:
         if self.active and self.agent.active:
-            g = sim.grid
+            g = self.agent.grid
             self.add_pos(
                 self.agent.px * g.gridsize + g.sx,
                 self.agent.py * g.gridsize + g.sy,
