@@ -1,0 +1,324 @@
+:root {
+  color-scheme: dark;
+  --ink: #f2f2f2;
+  --paper: #000000;
+  --panel: rgba(12, 12, 12, 0.88);
+  --red: #c80000;
+  --red-hot: #ff0000;
+  --red-down: #8a0000;
+  --line: #333;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: var(--ink);
+  font: 13px/1.35 Helvetica, Arial, sans-serif;
+}
+
+#stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  background: #000;
+}
+
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+#hud > * { pointer-events: auto; }
+
+#toolbar {
+  position: absolute;
+  top: 62px;
+  left: 10px;
+  z-index: 6;
+}
+
+.tool-tip {
+  position: absolute;
+  z-index: 7;
+  transform: translateX(-50%);
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.92);
+  border: 1px solid #c80000;
+  color: #f2f2f2;
+  font: 12px/1.35 Helvetica, Arial, sans-serif;
+  pointer-events: none;
+  white-space: normal;
+}
+
+.tool-tip[hidden] { display: none; }
+
+.java-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 32px);
+  gap: 2px;
+  width: max-content;
+}
+
+.java-btn {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: var(--red);
+  color: #000;
+  font: 700 11px/32px Helvetica, Arial, sans-serif;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.java-btn:hover,
+.java-btn.over { background: var(--red-hot); }
+
+.java-btn.active,
+.java-btn.down { background: var(--red-down); color: #fff; }
+
+#chrome {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  width: auto;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  z-index: 7;
+}
+
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.brand strong {
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+#panel {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: min(340px, calc(100vw - 20px));
+  max-height: min(48vh, 420px);
+  overflow: auto;
+  padding: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+#panel h2 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #bbb;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.row.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+.slider-line {
+  display: grid;
+  grid-template-columns: 1fr 52px;
+  gap: 8px;
+  align-items: center;
+}
+
+label, button, select, input, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button, select, input[type="range"], input[type="number"], textarea {
+  border: 1px solid #555;
+  background: #111;
+  border-radius: 0;
+  padding: 6px 8px;
+}
+
+#panel button.active {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+fieldset {
+  border: 1px solid #444;
+  margin: 0 0 8px;
+  padding: 8px;
+}
+
+legend { padding: 0 4px; color: #bbb; }
+
+#metrics {
+  white-space: pre-wrap;
+  background: #0a0a0a;
+  border: 1px solid #333;
+  padding: 8px;
+  min-height: 4.5em;
+}
+
+.hint { color: #9a9a9a; margin: 0 0 8px; }
+
+#status { margin-top: 8px; }
+
+.maplibregl-ctrl-group {
+  background: #111 !important;
+  border: 1px solid #444 !important;
+}
+
+.maplibregl-ctrl button {
+  background-color: #111 !important;
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(0,0,0,0.7) !important;
+  color: #ccc !important;
+}
+
+@media (max-width: 720px) {
+  #chrome { top: 8px; left: 8px; right: 8px; bottom: auto; }
+  #toolbar { top: 58px; left: 8px; }
+  .java-grid { grid-template-columns: repeat(5, 30px); }
+  .java-btn { width: 30px; height: 30px; line-height: 30px; }
+}
+
+/* What the active tool expects next, where the eye already is: over the map. */
+.hint-bar {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  max-width: min(420px, calc(100vw - 200px));
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.88);
+  border: 1px solid #c80000;
+  color: #ffffff;
+  font: 13px/1.35 Helvetica, Arial, sans-serif;
+  text-align: center;
+  pointer-events: none;
+}
+
+.hint-bar[hidden] { display: none; }
+
+.run-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin: 0 0 10px; }
+
+/* Two range inputs on one track: only the thumbs take the pointer. */
+.dual { position: relative; height: 30px; }
+.dual-track {
+  position: absolute; left: 0; right: 0; top: 13px; height: 4px;
+  background: #555; border-radius: 2px;
+}
+.dual-fill { position: absolute; top: 0; bottom: 0; background: #c80000; border-radius: 2px; }
+.dual input[type="range"] {
+  position: absolute; left: 0; top: 0; width: 100%; height: 30px; margin: 0; padding: 0;
+  background: none; border: 0; pointer-events: none;
+  -webkit-appearance: none; appearance: none;
+}
+.dual input[type="range"]::-webkit-slider-runnable-track { background: none; height: 30px; }
+.dual input[type="range"]::-moz-range-track { background: none; }
+.dual input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; pointer-events: auto;
+  width: 18px; height: 18px; margin-top: 6px; border-radius: 50%;
+  background: #ffffff; border: 2px solid #c80000; cursor: ew-resize;
+}
+.dual input[type="range"]::-moz-range-thumb {
+  pointer-events: auto; width: 14px; height: 14px; border-radius: 50%;
+  background: #ffffff; border: 2px solid #c80000; cursor: ew-resize;
+}
+.dual-scale { display: flex; justify-content: space-between; color: #9a9a9a; font-size: 11px; }
+
+/* The header stays one line, and the settings panel can be folded away so the
+   map is free on a phone. */
+#chrome { flex-wrap: nowrap; height: 44px; box-sizing: border-box; }
+.brand { white-space: nowrap; overflow: hidden; min-width: 0; }
+.brand span { overflow: hidden; text-overflow: ellipsis; }
+#panel-toggle { margin-left: auto; padding: 4px 10px; }
+#panel.folded { display: none; }
+.lang { white-space: nowrap; }
+@media (max-width: 560px) {
+  .lang > span { display: none; }
+  #net { display: none; }
+  #panel { right: 10px; width: auto; max-height: 44vh; }
+  .hint-bar { top: auto; bottom: calc(44vh + 20px); max-width: calc(100vw - 24px); }
+}
+
+/* Handles for stretching an imported image onto the ground. */
+.overlay-handle {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #ffcc00; border: 2px solid #000; box-sizing: border-box;
+  cursor: grab; touch-action: none;
+}
+.overlay-handle.move { border-radius: 4px; background: #ffffff; }
+
+/* Phones. Safari on iOS counts its own address and tool bars in 100% height,
+   so anything pinned to the bottom (the settings panel) can sit underneath
+   them. dvh is the height actually visible; the safe-area insets keep clear
+   of the notch and the home bar. */
+html, body, #stage { height: 100dvh; }
+#chrome { top: calc(8px + env(safe-area-inset-top)); }
+#panel {
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  max-height: min(48dvh, 420px);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+@media (max-width: 560px) {
+  #panel { max-height: 44dvh; }
+}
+
+/* A failure the user must see, not only in the status line inside the panel. */
+.alert-bar {
+  position: absolute;
+  left: 10px; right: 10px;
+  top: calc(58px + env(safe-area-inset-top));
+  z-index: 9;
+  padding: 10px 12px;
+  background: #5a0000;
+  border: 1px solid #ff4444;
+  color: #fff;
+  font: 13px/1.35 Helvetica, Arial, sans-serif;
+  white-space: pre-wrap;
+  max-height: 40dvh;
+  overflow: auto;
+}
+.alert-bar[hidden] { display: none; }

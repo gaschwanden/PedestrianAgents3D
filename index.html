@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>pedsim field</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="vendor/maplibre-gl.css">
+  <link rel="stylesheet" href="styles.css?v=25">
+</head>
+<body>
+  <div id="stage">
+    <div id="map" role="region" aria-label="map"></div>
+    <div id="hud">
+      <div id="toolbar" class="java-grid" aria-label="tools"></div>
+      <div id="tool-tip" class="tool-tip" hidden aria-hidden="true"></div>
+      <div id="hint" class="hint-bar" hidden role="status"></div>
+      <div id="alert" class="alert-bar" hidden role="alert"></div>
+      <div id="chrome">
+        <div class="brand">
+          <strong data-i18n="title">pedsim field</strong>
+          <span id="scale-label">Cluster</span>
+          <span id="net" data-i18n="online">Online</span>
+        </div>
+        <button type="button" id="panel-toggle" aria-controls="panel" aria-expanded="true">☰</button>
+        <label class="lang"><span data-i18n="language">Language</span>
+          <select id="lang">
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+          </select>
+        </label>
+      </div>
+      <aside id="panel">
+        <p class="hint" id="blurb" data-i18n="packed"></p>
+        <div class="run-row">
+          <button type="button" id="btn-run" data-i18n="btnRun">▶ Run</button>
+          <button type="button" id="btn-speed">⏩ ×2</button>
+          <button type="button" id="btn-reset" data-i18n="btnReset">↺ Reset</button>
+        </div>
+        <div class="row">
+          <span data-i18n="scale">Scale</span>
+          <div class="pair">
+            <button type="button" id="scale-cluster" class="active" data-i18n="cluster">Cluster</button>
+            <select id="site" aria-label="site">
+              <option value="" data-i18n="pickSite">Site…</option>
+            </select>
+          </div>
+        </div>
+        <label class="row check"><input id="chrono" type="checkbox" checked>
+          <span data-i18n="chronology">Chronology</span>
+        </label>
+        <div class="row">
+          <span><span data-i18n="window">Time of observation</span>: <output id="window-out"></output></span>
+          <!-- one track, two handles; values are minus the year BC so that
+               older is on the left -->
+          <div class="dual">
+            <div class="dual-track"><div id="dual-fill" class="dual-fill"></div></div>
+            <input id="start" type="range" min="-12000" max="-7000" step="50" value="-9500" aria-label="earlier end">
+            <input id="end" type="range" min="-12000" max="-7000" step="50" value="-8000" aria-label="later end">
+          </div>
+          <div class="dual-scale"><span>12000 BC</span><span>9500</span><span>7000 BC</span></div>
+        </div>
+        <label class="row"><span data-i18n="season">Season</span>
+          <select id="season"></select>
+        </label>
+        <fieldset>
+          <legend data-i18n="phases">Phases</legend>
+          <div id="phases"></div>
+        </fieldset>
+        <label class="row"><span data-i18n="basemap">Basemap</span>
+          <select id="basemap">
+            <option value="auto" selected data-i18n="mapAuto">Best available</option>
+            <option value="sat" data-i18n="mapSat">Satellite 10 m (offline)</option>
+            <option value="relief" data-i18n="relief">Relief (offline)</option>
+            <option value="esri" data-i18n="mapEsri">Satellite, detailed (online)</option>
+            <option value="google" data-i18n="google">Google satellite</option>
+            <option value="google-hybrid" data-i18n="googleHybrid">Google hybrid</option>
+            <option value="streets" data-i18n="streets">Streets</option>
+            <option value="none" data-i18n="none">None</option>
+          </select>
+        </label>
+        <label class="row check"><input id="roads" type="checkbox" checked>
+          <span data-i18n="roads">Roads and place names</span>
+        </label>
+        <label class="row"><span data-i18n="opacity">Opacity</span>
+          <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.7">
+        </label>
+        <label class="row check"><input id="log" type="checkbox">
+          <span data-i18n="log">Log scale</span>
+        </label>
+        <label class="row"><span data-i18n="cutoff">Hide below</span>
+          <input id="cutoff" type="range" min="0" max="0.9" step="0.05" value="0">
+        </label>
+        <div class="row">
+          <span data-i18n="overlayTitle">Image on the ground</span>
+          <div class="run-row">
+            <button type="button" id="overlay-add" data-i18n="overlayAdd">Add image</button>
+            <button type="button" id="overlay-edit" data-i18n="overlayEdit">Adjust</button>
+            <button type="button" id="overlay-remove" data-i18n="overlayRemove">Remove</button>
+          </div>
+          <input id="overlay-opacity" type="range" min="0.1" max="1" step="0.05" value="0.8" aria-label="image opacity">
+          <input id="overlay-file" type="file" accept="image/*" hidden>
+        </div>
+        <label class="row"><span data-i18n="tilt">3D tilt</span>
+          <input id="tilt" type="range" min="0" max="70" step="1" value="45">
+        </label>
+        <label class="row"><span data-i18n="undated">Undated sites</span>
+          <select id="undated">
+            <option value="exclude" data-i18n="undatedExclude">Leave out</option>
+            <option value="include_flagged" data-i18n="undatedFlag">Include, marked</option>
+            <option value="include" data-i18n="undatedInclude">Include</option>
+          </select>
+        </label>
+        <label class="row"><span data-i18n="terrainWeight">Slope effect</span>
+          <div class="slider-line">
+            <input id="terrain-weight" type="range" min="0" max="3" step="0.25" value="1">
+            <output id="terrain-weight-out">×1</output>
+          </div>
+        </label>
+        <label class="row"><span data-i18n="riverWeight">River crossing cost</span>
+          <div class="slider-line">
+            <input id="river-weight" type="range" min="0" max="4" step="0.25" value="1">
+            <output id="river-weight-out">×1</output>
+          </div>
+        </label>
+        <label class="row"><span data-i18n="agents">Walkers</span>
+          <div class="slider-line">
+            <input id="agents" type="range" min="10" max="600" step="10" value="250">
+            <output id="agents-out">250</output>
+          </div>
+        </label>
+        <label class="row"><span data-i18n="speed">Steps per frame</span>
+          <div class="slider-line">
+            <input id="speed" type="range" min="1" max="10" step="1" value="2">
+            <output id="speed-out">×2</output>
+          </div>
+        </label>
+        <label class="row check"><input id="low" type="checkbox">
+          <span data-i18n="lowPower">Low power</span>
+        </label>
+        <div class="row">
+          <span data-i18n="offlineTitle">Offline pack</span>
+          <div class="pair">
+            <button type="button" id="offline-get" data-i18n="offlineGet">Download all</button>
+            <span id="offline-state" class="hint"></span>
+          </div>
+        </div>
+        <h2 data-i18n="metrics">This view</h2>
+        <div id="metrics"></div>
+        <p class="hint" id="status" data-i18n="install"></p>
+      </aside>
+    </div>
+  </div>
+  <script src="strings.js?v=25"></script>
+  <script src="vendor/maplibre-gl.js"></script>
+  <script src="app.js?v=25"></script>
+</body>
+</html>
