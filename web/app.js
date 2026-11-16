@@ -31,7 +31,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v24";
+  const CACHE = "pedsim-field-v25";
   const ENGINE_FILES = [
     "vendor/pedsim.zip?v=" + new URL(document.currentScript.src).searchParams.get("v"),
     "vendor/pyodide/pyodide.js",
@@ -90,7 +90,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=24");
+  const worker = new Worker("worker.js?v=25");
   const canvas = document.createElement("canvas");
   // Walls read from a plan (one pixel per cell, phase colours) are painted
   // into the same canvas as the density. A second canvas source would be the
@@ -113,6 +113,20 @@
     buildToolbar();
     setNet();
   }
+
+  function showAlert(text) {
+    const bar = document.getElementById("alert");
+    bar.textContent = text + "\n\n" + navigator.userAgent;
+    bar.hidden = false;
+    bar.onclick = function () { bar.hidden = true; };
+  }
+
+  window.addEventListener("error", function (event) {
+    showAlert("Error: " + (event.message || event.error || "unknown"));
+  });
+  window.addEventListener("unhandledrejection", function (event) {
+    showAlert("Error: " + ((event.reason && event.reason.message) || event.reason || "unknown"));
+  });
 
   function setStatus(text) {
     document.getElementById("status").textContent = text;
@@ -848,12 +862,16 @@
       if (message.phase === "boot") setStatus(t("engineBoot") + " (" + message.text + ")");
       if (message.phase === "scene") setStatus(t("sceneLoading") + " " + message.text);
       if (message.phase === "loaded") setStatus(message.text);
-      if (message.phase === "failed") setStatus(t("engineOff") + ": " + message.text);
+      if (message.phase === "failed") {
+        setStatus(t("engineOff") + ": " + message.text);
+        showAlert(t("engineOff") + ": " + message.text);
+      }
       return;
     }
     if (message.type === "error") {
       state.awaiting = false;
       setStatus("engine: " + message.text);
+      showAlert("engine: " + message.text);
       return;
     }
     if (message.type === "geometry") {
