@@ -1,0 +1,20 @@
+numpy>=1.23
+matplotlib>=3.6
+pillow>=9.0
+imageio>=2.20
+imageio-ffmpeg>=0.4
+# Interactive viewer (pedsim.viewer). pygame-ce is a drop-in fork that ships
+# wheels for newer Python versions (incl. 3.13/3.14); it imports as `pygame`.
+pygame-ce>=2.5
+# Georeferenced input (pedsim.geo): DEM tiles, CRS transforms, hydrography.
+# Imported lazily, so the rest of the package works without them.
+rasterio>=1.3
+pyproj>=3.4
+shapely>=2.0
+pyshp>=2.3
+# Research features. Imported lazily where a module can still be read without them.
+pyyaml>=6.0
+jsonschema>=4.0
+scipy>=1.9
+networkx>=3.0
+gpxpy>=1.5

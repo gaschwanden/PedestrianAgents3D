@@ -1,0 +1,56 @@
+# Population classes. Every number here is an ASSUMPTION.
+# Shares must sum to 1. Infants are not modelled as walkers.
+source: ""
+confidence: assumption
+load_k: 0.2
+classes:
+  - id: child
+    label: "Child (approx. 6–11)"
+    share: 0.20
+    speed_factor: 0.75
+    max_range_m: 2000
+    max_load_kg: 8
+    source: ""
+    confidence: assumption
+    notes: "ASSUMPTION. Cross-cultural starting point, not a finding."
+  - id: adolescent
+    label: "Adolescent (12–17)"
+    share: 0.15
+    speed_factor: 0.95
+    max_range_m: 8000
+    max_load_kg: 15
+    source: ""
+    confidence: assumption
+  - id: adult_a
+    label: "Adult, group A"
+    share: 0.25
+    speed_factor: 1.00
+    max_range_m: 30000
+    max_load_kg: 20
+    source: ""
+    confidence: assumption
+    notes: "Neutral label, so the researcher can map it to a role."
+  - id: adult_b
+    label: "Adult, group B"
+    share: 0.25
+    speed_factor: 1.00
+    max_range_m: 30000
+    max_load_kg: 20
+    source: ""
+    confidence: assumption
+  - id: elder
+    label: "Elder (60+)"
+    share: 0.08
+    speed_factor: 0.80
+    max_range_m: 3000
+    max_load_kg: 8
+    source: ""
+    confidence: assumption
+  - id: carer
+    label: "Adult with infant"
+    share: 0.07
+    speed_factor: 0.85
+    max_range_m: 5000
+    max_load_kg: 10
+    source: ""
+    confidence: assumption

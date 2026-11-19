@@ -1,0 +1,27 @@
+[sites]
+NAME,name,,C,80
+CONFID,confidence,,C,20
+START_BC,start_bc,cal BC,N,8
+END_BC,end_bc,cal BC,N,8
+ACTIVE,active_in_window,1,N,2
+DATE_QUAL,date_quality,,C,16
+DEGREE,weighted_degree,min,F,12
+CLOSENESS,closeness,1,F,12
+BETWEEN,betweenness,1,F,12
+EIGEN,eigenvector,1,F,12
+[ods]
+NAME,name,,C,80
+KIND,kind,,C,24
+PHASES,phase_ids,,C,80
+OW,origin_weight,1,F,8
+DW,dest_weight,1,F,8
+CAPACITY,capacity,persons,F,10
+SITE,site,,C,80
+[buildings]
+KIND,kind,,C,16
+LAYER,layer,,C,32
+HEIGHT,height,m,F,8
+PHASES,phase_ids,,C,80
+FUNCTION,function,,C,16
+INHAB,inhabitants,persons,F,8
+STATE,state,,C,20

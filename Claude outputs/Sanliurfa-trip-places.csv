@@ -1,0 +1,55 @@
+Name,Latitude,Longitude,Day,Category,Time,Notes,Coordinate source
+GAP Şanlıurfa Airport (GNY),37.445463,38.904456,Sun,Transport,arrival / departure,,Google Maps
+Meşhur Ciğerci Aziz Usta,37.1490593,38.7892145,Sun; Fri,Food,late bite; 07:00 Fri,"Ciğer (liver) kebab, open 24 h",Google Maps
+Balıklıgöl (Fish Lake),37.1474207,38.7838596,Mon,Sight,06:40,Sacred pools at first light,Google Maps
+"Yeni Mahalle (PPN site, built over)",37.14869,38.78528,Mon,Neolithic site,07:15,Urfa Man find-spot; approximate,pedsim sites.py (approximate)
+Cave of Abraham (Mevlid-i Halil),37.1465715,38.786623,Mon,Sight,07:30,Modest dress,Google Maps
+Zahter Kahvaltı Salonu,37.157237,38.7917902,Mon,Food,07:50 breakfast,No menu: ask for kahvaltı; opens 05:30,Google Maps
+Şanlıurfa Archaeology Museum,37.1539273,38.7823901,Mon; Sat,Museum,08:30,08:30–17:00,Google Maps
+Haleplibahçe Mosaic Museum,37.1510266,38.7828993,Mon,Museum,10:45,"Same ticket, same day",Google Maps
+Çardaklı Köşk,37.1483383,38.7845535,Mon,Food,12:00 lunch,Terrace above Balıklıgöl,Google Maps
+Göbeklitepe,37.22361,38.92167,Mon; Sat,Neolithic site,13:15 Mon; 08:15 Sat,Open 08:30–17:00,pedsim sites.py (published)
+Gürcütepe,37.14028,38.8246,Mon,Neolithic site,16:45,"Approximate; NOT 37.1199,38.8459 (= Kazane Höyük)",pedsim sites.py (approximate)
+Kızılkoyun rock-cut tombs,37.1512112,38.7839444,Mon,Sight,18:15,Lit after dark; free,Google Maps
+Hanehan Restaurant,37.1497928,38.7913269,Mon,Food,19:30 dinner,Book: +90 505 414 44 14,Google Maps
+Biris Mezarlığı / Söğüt Tarlası – search area (Biris village),37.3095,38.55,Tue,Neolithic site,07:50,UNLOCATED: sites ~2 km SW of Bozova by reservoir edge; this is Biris village,pedsim sites.py (search area)
+Nevalı Çori (submerged),37.51833,38.60556,Tue,Neolithic site,09:30,Under the reservoir; view from the shore,pedsim sites.py (published)
+Karakuş Tumulus,37.8692498,38.5879262,Tue,Sight,13:15,,Google Maps
+Cendere Roman Bridge,37.9329143,38.6084898,Tue,Sight,13:45,,Google Maps
+Arsameia,37.9428461,38.6569509,Tue,Sight,14:15,,Google Maps
+Mount Nemrut summit,37.9807546,38.7409706,Tue,Sight,16:00,Sunset ~17:10; check snow/road,Google Maps
+Karadut Pension Nemrut,37.9309478,38.7824421,Tue,Lodging,18:00,Overnight; +90 530 670 02 47,Google Maps
+Ayanlar Höyük,37.18531,38.56073,Wed,Neolithic site,10:45,Approximate,pedsim sites.py (approximate)
+Yoğunburç,37.14479,38.61902,Wed,Neolithic site,11:45,Estimated location,pedsim sites.py (approximate)
+Sayburç,37.11124,38.6207,Wed,Neolithic site,12:20,Inside village,pedsim sites.py (published)
+Çakmaktepe,37.08634,38.63018,Wed,Neolithic site,13:40,Approximate,pedsim sites.py (approximate)
+Mendik Tepe – search area,37.04,38.62,Wed,Neolithic site,14:45,"UNLOCATED: ridge 1.3 km NE of Mendik village (box 37.02–37.06 N, 38.59–38.65 E)",pedsim sites.py (search area)
+Hamzan Tepe,37.08278,38.8015,Wed,Neolithic site,16:00,Sunset + slope transect,pedsim sites.py (approximate)
+Cevahir Han,37.155724,38.788118,Wed; Fri,Food,19:30 Wed dinner; 16:15 Fri,"Borani, katmer, şıllık",Google Maps
+Sümer Lahmacun & Urfa Kebap,37.1573524,38.7908043,Thu,Food,07:00 breakfast,Lahmacun; take extra for picnic,Google Maps
+Karahantepe,37.0925,39.30361,Thu,Neolithic site,08:30,Open 08:00–17:00,pedsim sites.py (published)
+Harbetsuvan Tepesi,37.04868,39.25243,Thu,Neolithic site,10:45,Mesa summit; free-choice walk,pedsim sites.py (published)
+Soğmatar,36.9956807,39.3378987,Thu,Sight,12:30,Yağmurlu village,Google Maps
+Han el-Ba'rur caravanserai,36.8249003,39.2901989,Thu,Sight,14:15,,Google Maps
+Harran – beehive houses,36.8599706,39.0319559,Thu,Sight,15:15,,Google Maps
+Harran – Ulu Camii & ancient university,36.8644236,39.0314717,Thu,Sight,15:45,,Google Maps
+Harran – citadel,36.8596637,39.0352951,Thu,Sight,16:45,Sunset,Google Maps
+Buzhane Restaurant & Konuk Evi,37.148345,38.7886119,Thu,Food,19:45 dinner,+90 538 403 16 26,Google Maps
+Miroğlu Kadayıf & Dondurma (Haliliye),37.1723803,38.8115167,Thu,Food,21:30 dessert,"Pistachio ice cream, billuriye",Google Maps
+Sefertepe (position A),37.18643,39.48982,Fri,Neolithic site,09:00,Conflicting: check which is the mound,pedsim sites.py (conflicting)
+"Sefertepe (position B, 1.6 km S)",37.1723,39.4895,Fri,Neolithic site,09:30,Conflicting: alternative coordinate,pedsim sites.py (conflicting)
+Altın Lokantası,37.1574977,38.813295,Fri,Food,11:45 lunch,East of centre (Yenihal); closed Sun,Google Maps
+Gümrük Hanı,37.148769,38.7894913,Fri,Sight / Food,12:30,Menengiç coffee,Google Maps
+"Sipahi Pazarı (carpets, kilims)",37.1488883,38.7891134,Fri,Shopping,12:45,,Google Maps
+Kuyumcular Çarşısı (jewellers),37.148285,38.788867,Fri,Shopping,14:15,Closed Sun,Google Maps
+"Bakırcılar / Kazancılar Çarşısı (coppersmiths, blacksmiths)",37.1476742,38.7898065,Fri; Sat,Shopping,15:00,Order name-stamped piece; closed Sun,Google Maps
+Barutçu Han,37.1478043,38.7889241,Fri,Sight,15:30,,Google Maps
+"Dergah Bazaar (spices, souvenirs)",37.1470827,38.7877022,Fri,Shopping,15:45,,Google Maps
+Reji Kilisesi,37.1506076,38.79327,Fri,Sight,16:30,,Google Maps
+Gülizar Konukevi – sıra gecesi,37.1517895,38.7906452,Fri,Food,20:00,Book; +90 414 215 05 05,Google Maps
+Urfa Castle,37.1457098,38.7841204,Sat,Sight,11:15,Recent reviews: interior closed for restoration; walk the walls/views,Google Maps
+Gulhan Restaurant,37.1587453,38.7911314,Sat,Food,12:30 lunch,Try the şıllık,Google Maps
+Çulcuoğlu Baklava & Restaurant,37.1674775,38.7986522,Sat,Food,afternoon,Baklava,Google Maps
+Derdo Usta Ocakbaşı,37.1569729,38.7907536,Sat,Food,19:30 farewell dinner,Grill counter,Google Maps
+Kurt Tepesi (optional),37.2347,39.2415,dropped (optional Sat),Neolithic site,,Above Çoban Deresi pass,pedsim sites.py (approximate)
+Taşlı Tepe (dropped),37.3689,39.28046,dropped,Neolithic site,,,pedsim sites.py (approximate)

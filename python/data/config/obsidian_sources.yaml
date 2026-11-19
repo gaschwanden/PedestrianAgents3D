@@ -1,0 +1,34 @@
+# East and Central Anatolian obsidian sources used as the regional scene's
+# starting list. Coordinates are approximate centroids, ASSUMPTION / VERIFY,
+# and must be replaced from the characterisation papers before a result is cited.
+source: ""
+confidence: assumption
+sources:
+  - id: bingol
+    name: "Bingöl"
+    lat: 38.90
+    lon: 40.50
+    attractiveness: 1
+    source: "VERIFY"
+    confidence: assumption
+  - id: nemrut
+    name: "Nemrut Dağ"
+    lat: 38.62
+    lon: 42.24
+    attractiveness: 1
+    source: "VERIFY"
+    confidence: assumption
+  - id: gollu
+    name: "Göllü Dağ"
+    lat: 38.26
+    lon: 34.57
+    attractiveness: 1
+    source: "VERIFY"
+    confidence: assumption
+  - id: nenezi
+    name: "Nenezi Dağ"
+    lat: 38.22
+    lon: 34.52
+    attractiveness: 1
+    source: "VERIFY"
+    confidence: assumption

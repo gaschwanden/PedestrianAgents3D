@@ -1,0 +1,27 @@
+# Month -> river season, and the gathering events.
+# Seasons are ASSUMPTION until a sourced climate calendar replaces them.
+# Daylight is computed in calendar.py for latitude_deg; it is not typed here.
+latitude_deg: 37.2
+source: ""
+confidence: assumption
+months:
+  - {number: 1, name: Jan, river_season: normal, confidence: assumption}
+  - {number: 2, name: Feb, river_season: normal, confidence: assumption}
+  - {number: 3, name: Mar, river_season: "spring floods", confidence: assumption}
+  - {number: 4, name: Apr, river_season: "spring floods", confidence: assumption}
+  - {number: 5, name: May, river_season: normal, confidence: assumption}
+  - {number: 6, name: Jun, river_season: normal, confidence: assumption}
+  - {number: 7, name: Jul, river_season: dry, confidence: assumption}
+  - {number: 8, name: Aug, river_season: dry, confidence: assumption}
+  - {number: 9, name: Sep, river_season: dry, confidence: assumption}
+  - {number: 10, name: Oct, river_season: normal, confidence: assumption}
+  - {number: 11, name: Nov, river_season: normal, confidence: assumption}
+  - {number: 12, name: Dec, river_season: normal, confidence: assumption}
+events:
+  - name: late-summer gathering
+    months: [8, 9]
+    site: Göbeklitepe
+    attendance_share: 0.4
+    duration_days: 14
+    source: "VERIFY Lang et al. 2013, World Archaeology 45(3)"
+    confidence: inferred
