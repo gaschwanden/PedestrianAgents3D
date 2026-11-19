@@ -31,7 +31,7 @@
 
   const PACK = "packs/goebekli/";
   // Must match sw.js: the offline download writes into the same cache.
-  const CACHE = "pedsim-field-v25";
+  const CACHE = "pedsim-field-v26";
   const ENGINE_FILES = [
     "vendor/pedsim.zip?v=" + new URL(document.currentScript.src).searchParams.get("v"),
     "vendor/pyodide/pyodide.js",
@@ -90,7 +90,7 @@
 
   // Same number as in index.html and sw.js: bump all three together so a
   // browser never mixes files from two versions.
-  const worker = new Worker("worker.js?v=25");
+  const worker = new Worker("worker.js?v=26");
   const canvas = document.createElement("canvas");
   // Walls read from a plan (one pixel per cell, phase colours) are painted
   // into the same canvas as the density. A second canvas source would be the
@@ -114,9 +114,23 @@
     setNet();
   }
 
-  function showAlert(text) {
+  function showAlert(text, retry) {
     const bar = document.getElementById("alert");
-    bar.textContent = text + "\n\n" + navigator.userAgent;
+    bar.textContent = text + "\n\n"
+      + (navigator.onLine ? "Browser reports: online" : "Browser reports: OFFLINE") + "\n"
+      + navigator.userAgent;
+    if (retry) {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.textContent = t("retry");
+      again.style.display = "block";
+      again.style.marginTop = "8px";
+      again.addEventListener("click", function (event) {
+        event.stopPropagation();
+        window.location.reload();
+      });
+      bar.appendChild(again);
+    }
     bar.hidden = false;
     bar.onclick = function () { bar.hidden = true; };
   }
@@ -864,7 +878,7 @@
       if (message.phase === "loaded") setStatus(message.text);
       if (message.phase === "failed") {
         setStatus(t("engineOff") + ": " + message.text);
-        showAlert(t("engineOff") + ": " + message.text);
+        showAlert(t("engineOff") + ": " + message.text + "\n" + t("retryHint"), true);
       }
       return;
     }

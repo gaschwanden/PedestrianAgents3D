@@ -17,13 +17,55 @@ function status(phase, text) {
   self.postMessage({ type: "status", phase: phase, text: text || "" });
 }
 
+// Everything the model needs before it can start, about 17 MB. Each file is
+// fetched here first, with retries, because a phone on a weak connection often
+// drops one large download; Pyodide's own loader would give up on the first
+// failure with nothing more than "Load failed". Once a file has arrived it is
+// in the offline cache (or the browser cache), and Pyodide gets it from there.
+const RUNTIME = "vendor/pyodide/";
+const RUNTIME_FILES = [
+  "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json",
+  "numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+  "pyyaml-6.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+];
+
+function wait(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function fetchWithRetry(url, options, label, tries) {
+  let last = null;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok) return response;
+      last = new Error("HTTP " + response.status);
+      if (response.status === 404) break;          // will not appear by waiting
+    } catch (error) {
+      last = error;
+    }
+    if (attempt < tries) {
+      status("boot", label + " — retry " + attempt + " of " + (tries - 1));
+      await wait(2000 * attempt);
+    }
+  }
+  const reason = last && last.message ? last.message : String(last);
+  throw new Error("could not download " + label + " (" + reason + ")");
+}
+
 function boot() {
   if (booted) return booted;
   booted = (async function () {
+    for (let i = 0; i < RUNTIME_FILES.length; i++) {
+      const name = RUNTIME_FILES[i];
+      status("boot", "download " + (i + 1) + "/" + (RUNTIME_FILES.length + 1) + ": " + name);
+      const response = await fetchWithRetry(RUNTIME + name, {}, name, 4);
+      await response.arrayBuffer();               // read it to the end, so it is complete
+    }
     status("boot", "Python runtime");
-    importScripts("vendor/pyodide/pyodide.js");
+    importScripts(RUNTIME + "pyodide.js");
     pyodide = await loadPyodide({
-      indexURL: new URL("vendor/pyodide/", self.location.href).href,
+      indexURL: new URL(RUNTIME, self.location.href).href,
     });
     status("boot", "numpy");
     await pyodide.loadPackage(["numpy", "pyyaml"]);
@@ -32,8 +74,8 @@ function boot() {
     // an old copy: its address carries the page version, and the request asks
     // the server to confirm it is current.
     const version = new URL(self.location.href).searchParams.get("v") || "0";
-    const response = await fetch("vendor/pedsim.zip?v=" + version, { cache: "no-cache" });
-    if (!response.ok) throw new Error("vendor/pedsim.zip missing — run python -m pedsim pack");
+    const response = await fetchWithRetry("vendor/pedsim.zip?v=" + version,
+      { cache: "no-cache" }, "pedsim.zip", 4);
     pyodide.FS.mkdirTree("/app");
     pyodide.unpackArchive(await response.arrayBuffer(), "zip", { extractDir: "/app" });
     pyodide.runPython([
