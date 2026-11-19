@@ -2,6 +2,8 @@ window.PEDSIM_STRINGS = {
   en: {
     title: "pedsim field",
     pickSite: "Site…",
+    retry: "Retry",
+    retryHint: "Usually a download that broke off on a weak connection. Move to better reception or Wi-Fi and tap Retry. Once it has started once, Download all keeps it on the phone for offline use.",
     overlayTitle: "Image on the ground",
     overlayAdd: "Add image",
     overlayEdit: "Adjust",
@@ -137,6 +139,8 @@ window.PEDSIM_STRINGS = {
   de: {
     title: "pedsim Gelände",
     pickSite: "Fundort…",
+    retry: "Nochmals",
+    retryHint: "Meist ein Download, der bei schwacher Verbindung abbrach. Besseren Empfang oder WLAN suchen und Nochmals tippen. Nach einem erfolgreichen Start hält Alles laden es offline auf dem Telefon.",
     overlayTitle: "Bild auf dem Boden",
     overlayAdd: "Bild laden",
     overlayEdit: "Anpassen",
